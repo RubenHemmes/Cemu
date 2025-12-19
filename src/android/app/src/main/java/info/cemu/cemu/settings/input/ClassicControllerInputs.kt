@@ -1,10 +1,8 @@
 package info.cemu.cemu.settings.input
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.stringResource
-import info.cemu.cemu.R
-import info.cemu.cemu.guicore.nativeenummapper.classicControllerButtonToStringId
-import info.cemu.cemu.nativeinterface.NativeInput
+import info.cemu.cemu.common.ui.localization.tr
+import info.cemu.cemu.nativeinterface.NativeInput.ClassicButton
 
 @Composable
 fun ClassicControllerInputs(
@@ -19,52 +17,79 @@ fun ClassicControllerInputs(
         InputItemsGroup(
             groupName = groupName,
             inputIds = inputIds,
-            inputIdToString = { stringResource(classicControllerButtonToStringId(it)) },
+            inputIdToString = ::classicControllerButtonToString,
             onInputClick = onInputClick,
             controlsMapping = controlsMapping,
         )
     }
     InputItemsGroup(
-        groupName = stringResource(R.string.buttons),
+        groupName = tr("Buttons"),
         inputIds = listOf(
-            NativeInput.CLASSIC_BUTTON_A,
-            NativeInput.CLASSIC_BUTTON_B,
-            NativeInput.CLASSIC_BUTTON_X,
-            NativeInput.CLASSIC_BUTTON_Y,
-            NativeInput.CLASSIC_BUTTON_L,
-            NativeInput.CLASSIC_BUTTON_R,
-            NativeInput.CLASSIC_BUTTON_ZL,
-            NativeInput.CLASSIC_BUTTON_ZR,
-            NativeInput.CLASSIC_BUTTON_PLUS,
-            NativeInput.CLASSIC_BUTTON_MINUS,
-            NativeInput.CLASSIC_BUTTON_HOME
+            ClassicButton.A,
+            ClassicButton.B,
+            ClassicButton.X,
+            ClassicButton.Y,
+            ClassicButton.L,
+            ClassicButton.R,
+            ClassicButton.ZL,
+            ClassicButton.ZR,
+            ClassicButton.PLUS,
+            ClassicButton.MINUS,
+            ClassicButton.HOME
         )
     )
     InputItemsGroup(
-        groupName = stringResource(R.string.d_pad),
+        groupName = tr("D-pad"),
         inputIds = listOf(
-            NativeInput.CLASSIC_BUTTON_UP,
-            NativeInput.CLASSIC_BUTTON_DOWN,
-            NativeInput.CLASSIC_BUTTON_LEFT,
-            NativeInput.CLASSIC_BUTTON_RIGHT
+            ClassicButton.UP,
+            ClassicButton.DOWN,
+            ClassicButton.LEFT,
+            ClassicButton.RIGHT
         )
     )
     InputItemsGroup(
-        groupName = stringResource(R.string.left_axis),
+        groupName = tr("Left Axis"),
         inputIds = listOf(
-            NativeInput.CLASSIC_BUTTON_STICKL_UP,
-            NativeInput.CLASSIC_BUTTON_STICKL_DOWN,
-            NativeInput.CLASSIC_BUTTON_STICKL_LEFT,
-            NativeInput.CLASSIC_BUTTON_STICKL_RIGHT
+            ClassicButton.STICKL_UP,
+            ClassicButton.STICKL_DOWN,
+            ClassicButton.STICKL_LEFT,
+            ClassicButton.STICKL_RIGHT
         )
     )
     InputItemsGroup(
-        groupName = stringResource(R.string.right_axis),
+        groupName = tr("Right Axis"),
         inputIds = listOf(
-            NativeInput.CLASSIC_BUTTON_STICKR_UP,
-            NativeInput.CLASSIC_BUTTON_STICKR_DOWN,
-            NativeInput.CLASSIC_BUTTON_STICKR_LEFT,
-            NativeInput.CLASSIC_BUTTON_STICKR_RIGHT
+            ClassicButton.STICKR_UP,
+            ClassicButton.STICKR_DOWN,
+            ClassicButton.STICKR_LEFT,
+            ClassicButton.STICKR_RIGHT
         )
     )
+}
+
+private fun classicControllerButtonToString(buttonId: Int) = when (buttonId) {
+    ClassicButton.A -> "A"
+    ClassicButton.B -> "B"
+    ClassicButton.X -> "X"
+    ClassicButton.Y -> "Y"
+    ClassicButton.L -> "L"
+    ClassicButton.R -> "R"
+    ClassicButton.ZL -> "ZL"
+    ClassicButton.ZR -> "ZR"
+    ClassicButton.PLUS -> "+"
+    ClassicButton.MINUS -> "-"
+    ClassicButton.HOME -> tr("home")
+    ClassicButton.UP -> tr("up")
+    ClassicButton.DOWN -> tr("down")
+    ClassicButton.LEFT -> tr("left")
+    ClassicButton.RIGHT -> tr("right")
+    ClassicButton.STICKL_UP -> tr("up")
+    ClassicButton.STICKL_DOWN -> tr("down")
+    ClassicButton.STICKL_LEFT -> tr("left")
+    ClassicButton.STICKL_RIGHT -> tr("right")
+    ClassicButton.STICKR_UP -> tr("up")
+    ClassicButton.STICKR_DOWN -> tr("down")
+    ClassicButton.STICKR_LEFT -> tr("left")
+    ClassicButton.STICKR_RIGHT -> tr("right")
+    else -> throw IllegalArgumentException("Invalid buttonId $buttonId for Classic controller type")
 }

@@ -6,7 +6,6 @@ add_library(CemuCommon
   ExceptionHandler/ExceptionHandler.cpp
   ExceptionHandler/ExceptionHandler.h
   FileStream.h
-  FileStream.cpp
   GLInclude/glext.h
   GLInclude/glFunctions.h
   GLInclude/GLInclude.h
@@ -47,7 +46,7 @@ PRIVATE
 )
 endif()
 
-if(UNIX AND NOT APPLE)
+if(LINUX)
 	target_sources(CemuCommon PRIVATE
 		ExceptionHandler/ELFSymbolTable.cpp
 		ExceptionHandler/ELFSymbolTable.h
@@ -56,11 +55,13 @@ endif()
 
 if(ANDROID)
   target_sources(CemuCommon PRIVATE
-    unix/ContentUriStream.h
-    unix/FilesystemAndroid.cpp
-    unix/FilesystemAndroid.h
-    unix/FileStream_contentUri.cpp
-    unix/FileStream_contentUri.h
+    android/FileStream_android.cpp
+    android/FileStream_android.h
+    android/FdStream.h
+    android/FileStream_saf.cpp
+    android/FileStream_saf.h
+    android/FilesystemAndroid.cpp
+    android/FilesystemAndroid.h
   )
 endif()
 
@@ -70,9 +71,6 @@ target_precompile_headers(CemuCommon PUBLIC precompiled.h)
 target_include_directories(CemuCommon PUBLIC "../")
 
 target_link_libraries(CemuCommon PRIVATE
-	CemuCafe
-	CemuConfig
-	CemuComponents
 	Boost::nowide
 	Boost::filesystem
 	glm::glm

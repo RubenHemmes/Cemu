@@ -1,3 +1,4 @@
+#include "WindowSystem.h"
 #include "util/crypto/aes128.h"
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
@@ -37,7 +38,7 @@
 #if BOOST_OS_LINUX
 #define _putenv(__s) putenv((char*)(__s))
 #include <sys/sysinfo.h>
-#elif BOOST_OS_MACOS
+#elif BOOST_OS_MACOS || BOOST_OS_BSD
 #define _putenv(__s) putenv((char*)(__s))
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -97,12 +98,12 @@ void WindowsInitCwd()
 {
 	#if BOOST_OS_WINDOWS
 	executablePath.resize(4096);
-	int i = GetModuleFileName(NULL, executablePath.data(), executablePath.size());
+	int i = GetModuleFileNameW(NULL, executablePath.data(), executablePath.size());
 	if(i >= 0)
 		executablePath.resize(i);
 	else
 		executablePath.clear();
-	SetCurrentDirectory(executablePath.c_str());
+	SetCurrentDirectoryW(executablePath.c_str());
 	// set high priority
 	SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 	#endif
@@ -121,7 +122,7 @@ void CemuCommonInit()
 	WindowsInitCwd();
     ExceptionHandler_Init();
 	// read config
-	g_config.Load();
+	GetConfigHandle().Load();
 	if (NetworkConfig::XMLExists())
 		n_config.Load();
 	// parallelize expensive init code
@@ -193,7 +194,7 @@ void HandlePostUpdate()
 		HANDLE lock;
 		do
 		{
-			lock = CreateMutex(nullptr, TRUE, L"Global\\cemu_update_lock");
+			lock = CreateMutexW(nullptr, TRUE, L"Global\\cemu_update_lock");
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		} while (lock == nullptr);
 		const DWORD wait_result = WaitForSingleObject(lock, 2000);
@@ -223,14 +224,14 @@ void gui_create();
 #if BOOST_OS_WINDOWS
 
 // entrypoint for release builds
-int wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPTSTR lpCmdLine, _In_ int nShowCmd)
+int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd)
 {
 	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE)))
 		cemuLog_log(LogType::Force, "CoInitializeEx() failed");
 	SDL_SetMainReady();
 	if (!LaunchSettings::HandleCommandline(lpCmdLine))
 		return 0;
-	gui_create();
+	WindowSystem::Create();
 	return 0;
 }
 
@@ -242,21 +243,21 @@ int main(int argc, char* argv[])
 	SDL_SetMainReady();
 	if (!LaunchSettings::HandleCommandline(argc, argv))
 		return 0;
-	gui_create();
+	WindowSystem::Create();
 	return 0;
 }
 
-#elif __ANDROID__
+#elif BOOST_PLAT_ANDROID
 #else
 
 int main(int argc, char *argv[])
 {
-#if BOOST_OS_LINUX
+#if BOOST_OS_LINUX || BOOST_OS_BSD
     XInitThreads();
 #endif
     if (!LaunchSettings::HandleCommandline(argc, argv))
 		return 0;
-	gui_create();
+	WindowSystem::Create();
 	return 0;
 }
 #endif

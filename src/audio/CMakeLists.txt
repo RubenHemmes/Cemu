@@ -31,10 +31,8 @@ endif()
 target_include_directories(CemuAudio PUBLIC "../")
 
 target_link_libraries(CemuAudio PRIVATE
-	CemuCafe
 	CemuCommon
-	CemuConfig
-	CemuUtil
+	CemuGui
 )
 
 if(ENABLE_CUBEB)

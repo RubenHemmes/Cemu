@@ -33,6 +33,9 @@ public:
 	[[nodiscard]] const std::optional<GraphicAPI>& GetGraphicsAPI() const { return m_graphics_api; }
 	[[nodiscard]] const AccurateShaderMulOption& GetAccurateShaderMul() const { return m_accurateShaderMul; }
 	void SetAccurateShaderMul(AccurateShaderMulOption accurateShaderMulOption) { m_accurateShaderMul = accurateShaderMulOption; }
+	[[nodiscard]] bool GetShaderFastMath() const { return m_shaderFastMath; }
+	[[nodiscard]] MetalBufferCacheMode GetBufferCacheMode() const { return m_metalBufferCacheMode; }
+	[[nodiscard]] PositionInvariance GetPositionInvariance() const { return m_positionInvariance; }
 	[[nodiscard]] const std::optional<PrecompiledShaderOption>& GetPrecompiledShadersState() const { return m_precompiledShaders; }
 
 	[[nodiscard]] uint32 GetThreadQuantum() const { return m_threadQuantum; }
@@ -44,7 +47,30 @@ public:
 
 	[[nodiscard]] const std::array< std::optional<std::string>, 8>& GetControllerProfile() const { return m_controllerProfile; }
 
-private:
+#if BOOST_PLAT_ANDROID
+  public:
+	struct DriverSetting
+	{
+		DriverSettingMode mode = DriverSettingMode::Global;
+		std::optional<std::string> customPath;
+	};
+
+	[[nodiscard]] DriverSetting GetDriverSetting() const
+	{
+		return m_driverSetting;
+	}
+
+	void SetDriverSetting(DriverSetting driverSetting)
+	{
+		m_driverSetting = driverSetting;
+	}
+
+  private:
+	DriverSetting m_driverSetting;
+
+#endif
+
+  private:
 	uint64_t m_title_id = 0;
 	bool m_is_loaded = false;
 	bool m_is_default = true;
@@ -58,6 +84,9 @@ private:
 	// graphic settings
 	std::optional<GraphicAPI> m_graphics_api{};
 	AccurateShaderMulOption m_accurateShaderMul = AccurateShaderMulOption::True;
+	bool m_shaderFastMath = true;
+	MetalBufferCacheMode m_metalBufferCacheMode = MetalBufferCacheMode::Auto;
+	PositionInvariance m_positionInvariance = PositionInvariance::Auto;
 	std::optional<PrecompiledShaderOption> m_precompiledShaders{};
 	// cpu settings
 	uint32 m_threadQuantum = kThreadQuantumDefault; // values: 20000 45000 60000 80000 100000

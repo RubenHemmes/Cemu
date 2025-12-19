@@ -1,3 +1,4 @@
+#include "WindowSystem.h"
 #include "JNIUtils.h"
 #include "AndroidAudio.h"
 #include "AndroidEmulatedController.h"
@@ -7,7 +8,6 @@
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
 #include "Cafe/CafeSystem.h"
-#include "Cemu/GuiSystem/GuiSystem.h"
 #include "GameTitleLoader.h"
 #include "input/ControllerFactory.h"
 #include "input/InputManager.h"
@@ -23,7 +23,7 @@ namespace NativeEmulation
 {
 	void initializeAudioDevices()
 	{
-		auto& config = g_config.data();
+		auto& config = GetConfig();
 		if (!config.tv_device.empty())
 			AndroidAudio::createAudioDevice(IAudioAPI::AudioAPI::Cubeb, config.tv_channels, config.tv_volume, true);
 
@@ -94,7 +94,8 @@ namespace NativeEmulation
 		if (!fs::exists(memorySearcherFolder))
 			fs::create_directories(memorySearcherFolder);
 	}
-	enum StartGameResult : sint32
+
+	enum PrepareTitleResult : sint32
 	{
 		SUCCESSFUL = 0,
 		ERROR_GAME_BASE_FILES_NOT_FOUND = 1,
@@ -102,61 +103,80 @@ namespace NativeEmulation
 		ERROR_NO_TITLE_TIK = 3,
 		ERROR_UNKNOWN = 4,
 	};
-	StartGameResult startGame(const fs::path& launchPath)
+
+	std::shared_ptr<ANativeWindow> createANativeWindowFromSurface(JNIEnv* env, jobject surface)
 	{
-		TitleInfo launchTitle{launchPath};
-		if (launchTitle.IsValid())
-		{
-			// the title might not be in the TitleList, so we add it as a temporary entry
-			CafeTitleList::AddTitleFromPath(launchPath);
-			// title is valid, launch from TitleId
-			TitleId baseTitleId;
-			if (!CafeTitleList::FindBaseTitleId(launchTitle.GetAppTitleId(), baseTitleId))
-			{
-				return ERROR_GAME_BASE_FILES_NOT_FOUND;
-			}
-			CafeSystem::PREPARE_STATUS_CODE r = CafeSystem::PrepareForegroundTitle(baseTitleId);
-			if (r != CafeSystem::PREPARE_STATUS_CODE::SUCCESS)
-			{
-				return ERROR_UNKNOWN;
-			}
-		}
-		else // if (launchTitle.GetFormat() == TitleInfo::TitleDataFormat::INVALID_STRUCTURE )
-		{
-			// title is invalid, if it's an RPX/ELF we can launch it directly
-			// otherwise it's an error
-			CafeTitleFileType fileType = DetermineCafeSystemFileType(launchPath);
-			if (fileType == CafeTitleFileType::RPX || fileType == CafeTitleFileType::ELF)
-			{
-				CafeSystem::PREPARE_STATUS_CODE r = CafeSystem::PrepareForegroundTitleFromStandaloneRPX(launchPath);
-				if (r != CafeSystem::PREPARE_STATUS_CODE::SUCCESS)
-				{
-					return ERROR_UNKNOWN;
-				}
-			}
-			else if (launchTitle.GetInvalidReason() == TitleInfo::InvalidReason::NO_DISC_KEY)
-			{
-				return ERROR_NO_DISC_KEY;
-			}
-			else if (launchTitle.GetInvalidReason() == TitleInfo::InvalidReason::NO_TITLE_TIK)
-			{
-				return ERROR_NO_TITLE_TIK;
-			}
-			else
-			{
-				return ERROR_UNKNOWN;
-			}
-		}
-		CafeSystem::LaunchForegroundTitle();
-		return SUCCESSFUL;
+		ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+		return {window, &ANativeWindow_release};
 	}
+
+	class TestSurface
+	{
+	  public:
+		TestSurface()
+		{
+			JNIUtils::ScopedJNIENV env;
+
+			jclass surfaceTextureClass = env->FindClass("android/graphics/SurfaceTexture");
+			jmethodID ctorSurfaceTexture = env->GetMethodID(surfaceTextureClass, "<init>", "(I)V");
+			jobject localSurfaceTexture = env->NewObject(surfaceTextureClass, ctorSurfaceTexture, 0);
+
+			jclass surfaceClass = env->FindClass("android/view/Surface");
+			jmethodID ctorSurface = env->GetMethodID(surfaceClass, "<init>", "(Landroid/graphics/SurfaceTexture;)V");
+			jobject localSurface = env->NewObject(surfaceClass, ctorSurface, localSurfaceTexture);
+
+			m_surfaceTexture = env->NewGlobalRef(localSurfaceTexture);
+			m_surface = env->NewGlobalRef(localSurface);
+
+			m_window = ANativeWindow_fromSurface(*env, m_surface);
+			ANativeWindow_acquire(m_window);
+
+			env->DeleteLocalRef(localSurfaceTexture);
+			env->DeleteLocalRef(localSurface);
+			env->DeleteLocalRef(surfaceTextureClass);
+			env->DeleteLocalRef(surfaceClass);
+		}
+
+		~TestSurface()
+		{
+			JNIUtils::ScopedJNIENV env;
+
+			ANativeWindow_release(m_window);
+
+			jclass surfaceClass = env->FindClass("android/view/Surface");
+			jmethodID releaseSurface = env->GetMethodID(surfaceClass, "release", "()V");
+			env->CallVoidMethod(m_surface, releaseSurface);
+			env->DeleteGlobalRef(m_surface);
+			m_surface = nullptr;
+			env->DeleteLocalRef(surfaceClass);
+
+			jclass surfaceTextureClass = env->FindClass("android/graphics/SurfaceTexture");
+			jmethodID releaseSurfaceTexture = env->GetMethodID(surfaceTextureClass, "release", "()V");
+			env->CallVoidMethod(m_surfaceTexture, releaseSurfaceTexture);
+			env->DeleteGlobalRef(m_surfaceTexture);
+			m_surfaceTexture = nullptr;
+			env->DeleteLocalRef(surfaceTextureClass);
+		}
+
+		ANativeWindow* getWindow()
+		{
+			return m_window;
+		}
+
+	  private:
+		ANativeWindow* m_window;
+		jobject m_surface = nullptr;
+		jobject m_surfaceTexture = nullptr;
+	};
+
+	std::unique_ptr<TestSurface> g_testSurface;
 } // namespace NativeEmulation
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_setReplaceTVWithPadView([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean swapped)
 {
         // Emulate pressing the TAB key for showing DRC instead of TV
-        GuiSystem::getWindowInfo().set_keystate(GuiSystem::PlatformKeyCodes::TAB, swapped);
+        WindowSystem::GetWindowInfo().set_keystate(static_cast<uint32>(WindowSystem::PlatformKeyCodes::TAB), swapped);
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
@@ -164,7 +184,7 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSwapScreens([[maybe_unuse
                                                                    [[maybe_unused]] jclass clazz,
                                                                    jboolean swapped)
 {
-        auto& windowInfo = GuiSystem::getWindowInfo();
+        auto& windowInfo = WindowSystem::GetWindowInfo();
         windowInfo.swap_screens = swapped;
         LatteGPUState.isDRCPrimary = swapped;
 }
@@ -175,14 +195,14 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setExternalScreenRotatedLeft
     [[maybe_unused]] jclass clazz,
     jboolean rotated)
 {
-        GuiSystem::getWindowInfo().external_screen_rotated_left = rotated;
+        WindowSystem::GetWindowInfo().external_screen_rotated_left = rotated;
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeEmulation([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-	FilesystemAndroid::setFilesystemCallbacks(std::make_shared<AndroidFilesystemCallbacks>());
-	g_config.SetFilename(ActiveSettings::GetConfigPath("settings.xml").generic_wstring());
+	FilesystemAndroid::SetFilesystemCallbacks(std::make_shared<AndroidFilesystemCallbacks>());
+	GetConfigHandle().SetFilename(ActiveSettings::GetConfigPath("settings.xml").generic_wstring());
 	NativeEmulation::createCemuDirectories();
 	NetworkConfig::LoadOnce();
 	ActiveSettings::Init();
@@ -191,36 +211,35 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeEmulation([[maybe_
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
-Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeRenderer(JNIEnv* env, [[maybe_unused]] jclass clazz, jobject j_testSurface)
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeRenderer(JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
 	InitializeGlobalVulkan();
-	using ANativewindow_Ptr = std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)>;
 	JNIUtils::handleNativeException(env, [&]() {
-		cemu_assert_debug(j_testSurface != nullptr);
-		ANativewindow_Ptr testSurface(ANativeWindow_fromSurface(env, j_testSurface), &ANativeWindow_release);
-		GuiSystem::getWindowInfo().window_main.surface = testSurface.get();
+		NativeEmulation::g_testSurface = std::make_unique<NativeEmulation::TestSurface>();
+
+		WindowSystem::GetWindowInfo().window_main.surface = NativeEmulation::g_testSurface->getWindow();
+
 		g_renderer = std::make_unique<VulkanRenderer>();
-		GuiSystem::getWindowInfo().window_main.surface = nullptr;
 	});
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_setDPI([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jfloat dpi)
 {
-	auto& windowInfo = GuiSystem::getWindowInfo();
+	auto& windowInfo = WindowSystem::GetWindowInfo();
 	windowInfo.dpi_scale = windowInfo.pad_dpi_scale = dpi;
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
-Java_info_cemu_cemu_nativeinterface_NativeEmulation_clearSurface([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean is_main_canvas)
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_clearPadSurface([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-        auto& windowInfo = GuiSystem::getWindowInfo();
+        auto& windowInfo = WindowSystem::GetWindowInfo();
         if (is_main_canvas)
                 return;
 
         windowInfo.pad_open = false;
 
-        auto renderer = static_cast<VulkanRenderer*>(g_renderer.get());
+        auto renderer = VulkanRenderer::GetInstance();
         if (renderer)
                 renderer->StopUsingPadAndWait();
 
@@ -230,11 +249,6 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_clearSurface([[maybe_unused]
                 ANativeWindow_release(static_cast<ANativeWindow*>(padHandle.surface));
                 padHandle.surface = nullptr;
         }
-}
-extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
-Java_info_cemu_cemu_nativeinterface_NativeEmulation_recreateRenderSurface([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean is_main_canvas)
-{
-	// TODO
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT jboolean JNICALL
@@ -246,35 +260,41 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_supportsLoadingCustomDriver(
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSurface(JNIEnv* env, [[maybe_unused]] jclass clazz, jobject surface, jboolean is_main_canvas)
 {
-        JNIUtils::handleNativeException(env, [&]() {
-                cemu_assert_debug(surface != nullptr);
-                auto& windowInfo = GuiSystem::getWindowInfo();
-                auto& windowHandleInfo = is_main_canvas ? windowInfo.canvas_main : windowInfo.canvas_pad;
-                windowHandleInfo.backend = GuiSystem::WindowHandleInfo::Backend::Android;
-                if (windowHandleInfo.surface)
-                {
-                        ANativeWindow_release(static_cast<ANativeWindow*>(windowHandleInfo.surface));
-                        windowHandleInfo.surface = nullptr;
-                }
-                windowHandleInfo.surface = ANativeWindow_fromSurface(env, surface);
-                int width, height;
-                if (is_main_canvas)
-                {
-                        GuiSystem::getWindowPhysSize(width, height);
-                }
-                else
-                {
-                        windowInfo.pad_open = true;
-                        GuiSystem::getPadWindowPhysSize(width, height);
-                }
-                VulkanRenderer::GetInstance()->InitializeSurface({width, height}, is_main_canvas);
-        });
+	JNIUtils::handleNativeException(env, [&]() {
+		auto& windowHandleInfo = is_main_canvas ? WindowSystem::GetWindowInfo().canvas_main : WindowSystem::GetWindowInfo().canvas_pad;
+		auto oldWindow = windowHandleInfo.surface.load();
+		if (oldWindow != nullptr)
+			ANativeWindow_release(static_cast<ANativeWindow*>(oldWindow));
+		auto newSurface = ANativeWindow_fromSurface(env, surface);
+		ANativeWindow_acquire(newSurface);
+		windowHandleInfo.surface = newSurface;
+		windowHandleInfo.surface.notify_all();
+	});
+}
+
+extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeSurface(JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean is_main_canvas)
+{
+	JNIUtils::handleNativeException(env, [&]() {
+		int width, height;
+		if (is_main_canvas)
+		{
+			WindowSystem::GetWindowPhysSize(width, height);
+		}
+		else
+		{
+			WindowSystem::GetPadWindowPhysSize(width, height);
+			WindowSystem::GetWindowInfo().pad_open = true;
+		}
+
+		VulkanRenderer::GetInstance()->InitializeSurface({width, height}, is_main_canvas);
+	});
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSurfaceSize([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jint width, jint height, jboolean is_main_canvas)
 {
-	auto& windowInfo = GuiSystem::getWindowInfo();
+	auto& windowInfo = WindowSystem::GetWindowInfo();
 	if (is_main_canvas)
 	{
 		windowInfo.width = windowInfo.phys_width = width;
@@ -287,12 +307,83 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSurfaceSize([[maybe_unuse
 	}
 }
 
-extern "C" [[maybe_unused]] JNIEXPORT jint JNICALL
-Java_info_cemu_cemu_nativeinterface_NativeEmulation_startGame([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jstring launchPath)
+extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_initializeSystems([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-        GuiSystem::getWindowInfo().set_keystates_up();
-        NativeEmulation::initializeAudioDevices();
-        auto result = NativeEmulation::startGame(JNIUtils::toString(env, launchPath));
-        LatteGPUState.isDRCPrimary = GuiSystem::getWindowInfo().swap_screens;
-        return result;
+	WindowSystem::GetWindowInfo().set_keystatesup();
+	NativeEmulation::initializeAudioDevices();
+}
+
+extern "C" [[maybe_unused]] JNIEXPORT jint JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_prepareTitle([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jstring launch_path)
+{
+	fs::path launchPath = JNIUtils::toString(env, launch_path);
+
+	TitleInfo launchTitle{launchPath};
+
+	using enum NativeEmulation::PrepareTitleResult;
+
+	if (launchTitle.IsValid())
+	{
+		LatteGPUState.isDRCPrimary = WindowSystem::GetWindowInfo().swap_screens;
+		// the title might not be in the TitleList, so we add it as a temporary entry
+		CafeTitleList::AddTitleFromPath(launchPath);
+		// title is valid, launch from TitleId
+		TitleId baseTitleId;
+		if (!CafeTitleList::FindBaseTitleId(launchTitle.GetAppTitleId(), baseTitleId))
+		{
+			return ERROR_GAME_BASE_FILES_NOT_FOUND;
+		}
+		CafeSystem::PREPARE_STATUS_CODE r = CafeSystem::PrepareForegroundTitle(baseTitleId);
+		if (r != CafeSystem::PREPARE_STATUS_CODE::SUCCESS)
+		{
+			return ERROR_UNKNOWN;
+		}
+	}
+	else // if (launchTitle.GetFormat() == TitleInfo::TitleDataFormat::INVALID_STRUCTURE )
+	{
+		// title is invalid, if it's an RPX/ELF we can launch it directly
+		// otherwise it's an error
+		CafeTitleFileType fileType = DetermineCafeSystemFileType(launchPath);
+		if (fileType == CafeTitleFileType::RPX || fileType == CafeTitleFileType::ELF)
+		{
+			CafeSystem::PREPARE_STATUS_CODE r = CafeSystem::PrepareForegroundTitleFromStandaloneRPX(launchPath);
+			if (r != CafeSystem::PREPARE_STATUS_CODE::SUCCESS)
+			{
+				return ERROR_UNKNOWN;
+			}
+		}
+		else if (launchTitle.GetInvalidReason() == TitleInfo::InvalidReason::NO_DISC_KEY)
+		{
+			return ERROR_NO_DISC_KEY;
+		}
+		else if (launchTitle.GetInvalidReason() == TitleInfo::InvalidReason::NO_TITLE_TIK)
+		{
+			return ERROR_NO_TITLE_TIK;
+		}
+		else
+		{
+			return ERROR_UNKNOWN;
+		}
+	}
+
+	return SUCCESSFUL;
+}
+
+extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_launchTitle([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
+{
+	CafeSystem::LaunchForegroundTitle();
+}
+
+extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_pauseTitle([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
+{
+	CafeSystem::PauseTitle();
+}
+
+extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_resumeTitle([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
+{
+	CafeSystem::ResumeTitle();
 }

@@ -1,14 +1,22 @@
 package info.cemu.cemu
 
 import android.app.Application
+import info.cemu.cemu.common.android.context.internalFolder
+import info.cemu.cemu.common.settings.AppSettingsStore
+import info.cemu.cemu.common.ui.localization.setLanguage
+import info.cemu.cemu.common.ui.localization.setTranslations
 import info.cemu.cemu.nativeinterface.NativeActiveSettings.initializeActiveSettings
 import info.cemu.cemu.nativeinterface.NativeActiveSettings.setInternalDir
 import info.cemu.cemu.nativeinterface.NativeActiveSettings.setNativeLibDir
 import info.cemu.cemu.nativeinterface.NativeEmulation.initializeEmulation
 import info.cemu.cemu.nativeinterface.NativeEmulation.setDPI
+import info.cemu.cemu.nativeinterface.NativeFiles
 import info.cemu.cemu.nativeinterface.NativeGraphicPacks.refreshGraphicPacks
 import info.cemu.cemu.nativeinterface.NativeLogging.crashLog
 import info.cemu.cemu.nativeinterface.NativeSwkbd.initializeSwkbd
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 import java.io.PrintWriter
@@ -16,24 +24,30 @@ import java.io.StringWriter
 import java.util.regex.Pattern
 
 class CemuApplication : Application() {
-    init {
-        Application = this
-    }
-
-    val internalFolder: File
-        get() {
-            val externalFilesDir = getExternalFilesDir(null)
-            if (externalFilesDir != null) {
-                return externalFilesDir
-            }
-            return filesDir
-        }
-
     override fun onCreate() {
         super.onCreate()
+
         configureExceptionHandler()
+
+        AppSettingsStore.init(this)
+
+        NativeFiles.initialize(contentResolver)
+
+        initializeTranslations()
+
         initializeCemu()
+
         saveDataFiles()
+    }
+
+    private fun initializeTranslations() {
+        setTranslations(this)
+
+        val language = runBlocking {
+            AppSettingsStore.dataStore.data.map { it.guiSettings.language }.first()
+        }
+
+        setLanguage(language, this)
     }
 
     private fun saveDataFiles() {
@@ -46,18 +60,12 @@ class CemuApplication : Application() {
         val hashFileName = "hash.txt"
         val hashFile = dataFolder.resolve(hashFileName)
         val oldHash = if (hashFile.isFile) hashFile.readText() else "invalid"
-        
-        val assetsFileStream = try {
-            assets.open(hashFileName)
-        } catch (_: IOException) {
-            null
-        }
 
-        if (assetsFileStream == null) {
+        val newHash = try {
+            assets.open(hashFileName).use { it.reader().readText() }
+        } catch (_: IOException) {
             return
         }
-
-        val newHash = assetsFileStream.reader().readText()
 
         if (oldHash == newHash) {
             return
@@ -98,7 +106,8 @@ class CemuApplication : Application() {
 
             val outFile = dataFolder.resolve(assetFile)
             outFile.parentFile?.mkdirs()
-            assets.open(assetFile).copyTo(outFile.outputStream())
+            assets.open(assetFile)
+                .use { asset -> outFile.outputStream().use { out -> asset.copyTo(out) } }
         }
     }
 
@@ -135,10 +144,10 @@ class CemuApplication : Application() {
     }
 
     private val internalCemuDataFolder: String
-        get() = internalFolder.resolve("data").toString()
+        get() = internalFolder().resolve("data").toString()
 
     private val internalCemuUserFolder: String
-        get() = internalFolder.toString()
+        get() = internalFolder().toString()
 
     companion object {
         init {
@@ -146,9 +155,5 @@ class CemuApplication : Application() {
         }
 
         private var DefaultUncaughtExceptionHandler: Thread.UncaughtExceptionHandler? = null
-
-        @JvmStatic
-        lateinit var Application: CemuApplication
-            private set
     }
 }

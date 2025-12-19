@@ -1,570 +1,80 @@
 package info.cemu.cemu.emulation
 
-import android.annotation.SuppressLint
-import android.app.Presentation
-import android.content.Context
-import android.content.DialogInterface
-import android.graphics.SurfaceTexture
-import android.hardware.display.DisplayManager
 import android.os.Bundle
-import android.text.InputFilter.LengthFilter
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.Surface
-import android.view.SurfaceHolder
-import android.view.SurfaceView
-import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.Display
-import android.widget.LinearLayout
-import android.widget.Toast
-import androidx.activity.OnBackPressedCallback
-import androidx.annotation.Keep
-import androidx.annotation.StringRes
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.textfield.TextInputLayout
 import info.cemu.cemu.BuildConfig
-import info.cemu.cemu.R
-import info.cemu.cemu.common.android.display.DisplayUtils
-import info.cemu.cemu.databinding.ActivityEmulationBinding
-import info.cemu.cemu.databinding.LayoutSideMenuCheckboxItemBinding
-import info.cemu.cemu.databinding.LayoutSideMenuEmulationBinding
-import info.cemu.cemu.databinding.LayoutSideMenuTextItemBinding
-import info.cemu.cemu.input.InputManager
-import info.cemu.cemu.input.SensorManager
-import info.cemu.cemu.inputoverlay.InputOverlaySettingsManager
-import info.cemu.cemu.inputoverlay.InputOverlaySurfaceView
-import info.cemu.cemu.inputoverlay.OverlaySettings
-import info.cemu.cemu.nativeinterface.NativeEmulation
-import info.cemu.cemu.nativeinterface.NativeException
-import info.cemu.cemu.nativeinterface.NativeSwkbd.setCurrentInputText
-import info.cemu.cemu.settings.EmulationScreenSettings
-import info.cemu.cemu.settings.SettingsManager
-import java.lang.ref.WeakReference
-import java.util.EnumMap
+import info.cemu.cemu.common.ui.components.ActivityContent
+import info.cemu.cemu.common.ui.localization.TranslatableContent
 import kotlin.system.exitProcess
 
 class EmulationActivity : AppCompatActivity() {
-    private enum class CanvasType {
-        MAIN,
-        PAD,
-    }
-
-    private data class SurfaceDimensions(var width: Int = 1, var height: Int = 1)
-
-    private inner class CanvasSurfaceHolderCallback(private val canvasType: CanvasType) :
-        SurfaceHolder.Callback {
-        var surfaceSet: Boolean = false
-
-        override fun surfaceCreated(surfaceHolder: SurfaceHolder) {}
-
-        override fun surfaceChanged(
-            surfaceHolder: SurfaceHolder,
-            format: Int,
-            width: Int,
-            height: Int,
-        ) {
-            try {
-                NativeEmulation.setSurfaceSize(width, height, canvasType == CanvasType.MAIN)
-                if (!surfaceSet) {
-                    NativeEmulation.setSurface(surfaceHolder.surface, canvasType == CanvasType.MAIN)
-                    surfaceSet = true
-                }
-            } catch (exception: NativeException) {
-                onEmulationError(getString(R.string.failed_create_surface_error, exception.message))
-            }
-            updateSurfaceDimensions(canvasType, width, height)
-        }
-
-        override fun surfaceDestroyed(surfaceHolder: SurfaceHolder) {
-            NativeEmulation.clearSurface(canvasType == CanvasType.MAIN)
-            surfaceSet = false
-        }
-    }
-
-    private val inputManager = InputManager()
-    private var emulationTextInputDialog: AlertDialog? = null
-    private var isGameRunning = false
-    private var padCanvas: SurfaceView? = null
-    private var toast: Toast? = null
-    private lateinit var binding: ActivityEmulationBinding
-    private var isMotionEnabled = false
-    private lateinit var overlaySettings: OverlaySettings
-    private lateinit var emulationScreenSettings: EmulationScreenSettings
-    private lateinit var settingsManager: SettingsManager
-    private lateinit var inputOverlaySurfaceView: InputOverlaySurfaceView
     private lateinit var sensorManager: SensorManager
-    private lateinit var displayManager: DisplayManager
-    private var padPresentation: PadPresentation? = null
-    private var isPadOnExternalDisplay = false
-    private var hasEmulationError = false
-    private val canvasSurfaceDimensions =
-        EnumMap<CanvasType, SurfaceDimensions>(CanvasType::class.java).apply {
-            put(CanvasType.MAIN, SurfaceDimensions())
-            put(CanvasType.PAD, SurfaceDimensions())
-        }
-    private lateinit var mainCanvasTouchListener: CanvasOnTouchListener
-    private var padCanvasTouchListener: CanvasOnTouchListener? = null
-    private var padPresentationTouchListener: CanvasOnTouchListener? = null
-
-    private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) = updatePadPresentation()
-        override fun onDisplayRemoved(displayId: Int) = updatePadPresentation()
-        override fun onDisplayChanged(displayId: Int) = updatePadPresentation()
-    }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if (inputManager.onMotionEvent(event)) {
+        if (InputHandler.onMotionEvent(event)) {
             return true
         }
+
         return super.onGenericMotionEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (inputManager.onKeyEvent(event)) {
+        if (InputHandler.onKeyEvent(event)) {
             return true
         }
+
         return super.dispatchKeyEvent(event)
     }
 
-    private fun getLaunchPath(): String {
+    private fun getGamePath(): String {
         val extras = intent.extras
         val data = intent.data
         var launchPath: String? = null
+
         if (extras != null) {
             launchPath = extras.getString(EXTRA_LAUNCH_PATH)
         }
+
         if (launchPath == null && data != null) {
             launchPath = data.toString()
         }
+
         if (launchPath == null) {
             throw RuntimeException("launchPath is null")
         }
+
         return launchPath
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        DisplayUtils.init(this)
+        sensorManager = SensorManager(this)
+        sensorManager.setDeviceRotationProvider { display.rotation }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        emulationActivityInstance = WeakReference(this)
-
-        overlaySettings = InputOverlaySettingsManager(this).overlaySettings
-        settingsManager = SettingsManager(this)
-        emulationScreenSettings = settingsManager.emulationScreenSettings
-        isPadOnExternalDisplay = emulationScreenSettings.isPadOnExternalDisplay
-        sensorManager = SensorManager(this)
-        sensorManager.setDeviceRotationProvider(deviceRotationProvider = { display.rotation })
-        displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                showExitConfirmationDialog()
-            }
-        })
-
-        initializeView(getLaunchPath())
-        displayManager.registerDisplayListener(displayListener, null)
-        setContentView(binding.root)
-    }
-
-    private fun destroyPadCanvas() {
-        if (padCanvas == null) {
-            return
-        }
-        binding.canvasesLayout.removeView(padCanvas)
-        padCanvas = null
-        padCanvasTouchListener = null
-    }
-
-    private fun setPadViewVisibility(visible: Boolean) {
-        binding.sideMenu.showPadCheckbox.checkbox.isChecked = visible
-        if (emulationScreenSettings.isPadVisible != visible) {
-            emulationScreenSettings.isPadVisible = visible
-            settingsManager.emulationScreenSettings = emulationScreenSettings
-        }
-        if (isPadOnExternalDisplay) {
-            if (visible) {
-                updatePadPresentation()
-            } else {
-                dismissPadPresentation()
-            }
-        } else {
-            if (visible) {
-                createPadCanvas()
-            } else {
-                destroyPadCanvas()
-            }
-        }
-    }
-
-    private fun setPadOnExternalDisplay(enabled: Boolean) {
-        isPadOnExternalDisplay = enabled
-        binding.sideMenu.externalDisplayCheckbox.checkbox.isChecked = enabled
-        emulationScreenSettings.isPadOnExternalDisplay = enabled
-        settingsManager.emulationScreenSettings = emulationScreenSettings
-
-        if (enabled) {
-            destroyPadCanvas()
-        } else {
-            dismissPadPresentation()
-        }
-        updatePadPresentation()
-        configurePadTouchListeners()
-    }
-
-    private fun setSwapScreens(enabled: Boolean) {
-        emulationScreenSettings.areScreensSwapped = enabled
-        binding.sideMenu.swapScreensCheckbox.checkbox.isChecked = enabled
-        settingsManager.emulationScreenSettings = emulationScreenSettings
-        NativeEmulation.setSwapScreens(enabled)
-
-        updateTouchListenerTargets()
-        dismissPadPresentation()
-        updatePadPresentation()
-    }
-
-    private fun updatePadPresentation() {
-        NativeEmulation.setExternalScreenRotatedLeft(
-            emulationScreenSettings.isExternalScreenRotatedLeft
-        )
-        val showPad = binding.sideMenu.showPadCheckbox.checkbox.isChecked
-        if (!isPadOnExternalDisplay || !showPad) {
-            dismissPadPresentation()
-            if (showPad && padCanvas == null) {
-                createPadCanvas()
-            }
-            return
-        }
-
-        val currentDisplayId = display?.displayId
-        val padDisplay = if (currentDisplayId == Display.DEFAULT_DISPLAY) {
-            DisplayUtils.getExternalDisplay(this)
-        } else {
-            DisplayUtils.getInternalDisplay(this)
-        }
-
-        if (padDisplay == null) {
-            dismissPadPresentation()
-            if (padCanvas == null) {
-                createPadCanvas()
-            }
-            return
-        }
-
-        dismissPadPresentation()
-        padPresentation = PadPresentation(this, padDisplay).also { it.show() }
-    }
-
-    private fun configureMainCanvasTouchListener() {
-        if (!::mainCanvasTouchListener.isInitialized) {
-            return
-        }
-        val isTvTarget = !emulationScreenSettings.areScreensSwapped
-        val targetDimensions = canvasSurfaceDimensions.getValue(
-            if (isTvTarget) CanvasType.MAIN else CanvasType.PAD
-        )
-        mainCanvasTouchListener.updateConfiguration(
-            isTv = isTvTarget,
-            surfaceWidth = targetDimensions.width,
-            surfaceHeight = targetDimensions.height,
-            rotateLeft = false
-        )
-    }
-
-    private fun configurePadTouchListeners() {
-        val isTvTarget = emulationScreenSettings.areScreensSwapped
-        val targetDimensions = canvasSurfaceDimensions.getValue(
-            if (isTvTarget) CanvasType.MAIN else CanvasType.PAD
-        )
-        padCanvasTouchListener?.updateConfiguration(
-            isTv = isTvTarget,
-            surfaceWidth = targetDimensions.width,
-            surfaceHeight = targetDimensions.height,
-            rotateLeft = false
-        )
-        val rotateLeft = isPadOnExternalDisplay && emulationScreenSettings.isExternalScreenRotatedLeft
-        padPresentationTouchListener?.updateConfiguration(
-            isTv = isTvTarget,
-            surfaceWidth = targetDimensions.width,
-            surfaceHeight = targetDimensions.height,
-            rotateLeft = rotateLeft
-        )
-    }
-
-    private fun updateTouchListenerTargets() {
-        configureMainCanvasTouchListener()
-        configurePadTouchListeners()
-    }
-
-    private fun updateSurfaceDimensions(canvasType: CanvasType, width: Int, height: Int) {
-        val dimensions = canvasSurfaceDimensions[canvasType] ?: return
-        dimensions.width = width.coerceAtLeast(1)
-        dimensions.height = height.coerceAtLeast(1)
-        val isMainTargetingTv = !emulationScreenSettings.areScreensSwapped
-        when (canvasType) {
-            CanvasType.MAIN -> {
-                configureMainCanvasTouchListener()
-                if (!isMainTargetingTv) {
-                    configurePadTouchListeners()
-                }
-            }
-
-            CanvasType.PAD -> {
-                configurePadTouchListeners()
-                if (!isMainTargetingTv) {
-                    configureMainCanvasTouchListener()
-                }
-            }
-        }
-    }
-
-    private fun dismissPadPresentation() {
-        padPresentation?.dismiss()
-        padPresentation = null
-        padPresentationTouchListener = null
-    }
-
-    private inner class PadPresentation(context: Context, display: Display) :
-        Presentation(context, display) {
-        private lateinit var surfaceView: SurfaceView
-
-        override fun onCreate(savedInstanceState: Bundle?) {
-            super.onCreate(savedInstanceState)
-            window?.addFlags(
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-            )
-            val mode = display.mode
-            surfaceView = SurfaceView(context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-
-                var surfaceWidth = mode.physicalWidth
-                var surfaceHeight = mode.physicalHeight
-                if (surfaceWidth < surfaceHeight) {
-                    val tmp = surfaceWidth
-                    surfaceWidth = surfaceHeight
-                    surfaceHeight = tmp
-                }
-                if (emulationScreenSettings.isExternalScreenRotatedLeft) {
-                    val tmp = surfaceWidth
-                    surfaceWidth = surfaceHeight
-                    surfaceHeight = tmp
-                }
-                holder.setFixedSize(surfaceWidth, surfaceHeight)
-
-                holder.addCallback(CanvasSurfaceHolderCallback(CanvasType.PAD))
-                CanvasOnTouchListener().also { listener ->
-                    setOnTouchListener(listener)
-                    padPresentationTouchListener = listener
-                    configurePadTouchListeners()
-                }
-            }
-            setContentView(surfaceView)
-        }
-    }
-
-    private fun setMotionEnabled(enabled: Boolean) {
-        isMotionEnabled = enabled
-        if (isMotionEnabled) {
-            sensorManager.startListening()
-        } else {
-            sensorManager.pauseListening()
-        }
-    }
-
-    private fun LayoutSideMenuTextItemBinding.setEnabled(isEnabled: Boolean) {
-        textItem.isEnabled = isEnabled
-        textItem.alpha = if (isEnabled) 1f else 0.7f
-    }
-
-    private fun LayoutSideMenuTextItemBinding.configure(
-        isEnabled: Boolean = true,
-        onClick: () -> Unit,
-    ) {
-        setEnabled(isEnabled)
-        textItem.setOnClickListener {
-            onClick()
-            binding.drawerLayout.close()
-        }
-    }
-
-    private fun LayoutSideMenuCheckboxItemBinding.configure(
-        initialCheckedStatus: Boolean = false,
-        onCheckChanged: (Boolean) -> Unit,
-    ) {
-        checkbox.isChecked = initialCheckedStatus
-        checkboxItem.setOnClickListener {
-            checkbox.isChecked = !checkbox.isChecked
-            onCheckChanged(checkbox.isChecked)
-            binding.drawerLayout.close()
-        }
-    }
-
-    private fun LayoutSideMenuEmulationBinding.configureSideMenu() {
-        val isInputOverlayEnabled = overlaySettings.isOverlayEnabled
-
-        enableMotionCheckbox.configure(onCheckChanged = ::setMotionEnabled)
-        replaceTvWithPadCheckbox.configure(onCheckChanged = NativeEmulation::setReplaceTVWithPadView)
-        showPadCheckbox.configure(
-            initialCheckedStatus = emulationScreenSettings.isPadVisible,
-            onCheckChanged = ::setPadViewVisibility
-        )
-        externalDisplayCheckbox.configure(
-            initialCheckedStatus = emulationScreenSettings.isPadOnExternalDisplay,
-            onCheckChanged = ::setPadOnExternalDisplay
-        )
-        swapScreensCheckbox.configure(
-            initialCheckedStatus = emulationScreenSettings.areScreensSwapped,
-            onCheckChanged = ::setSwapScreens
-        )
-        rotateExternalDisplayLeftCheckbox.configure(
-            initialCheckedStatus = emulationScreenSettings.isExternalScreenRotatedLeft
-        ) { rotated ->
-            if (emulationScreenSettings.isExternalScreenRotatedLeft != rotated) {
-                emulationScreenSettings.isExternalScreenRotatedLeft = rotated
-                settingsManager.emulationScreenSettings = emulationScreenSettings
-                updatePadPresentation()
-            }
-        }
-        showInputOverlayCheckbox.configure(initialCheckedStatus = isInputOverlayEnabled) { showInputOverlay ->
-            editInputsMenuItem.setEnabled(showInputOverlay)
-            resetInputOverlayMenuItem.setEnabled(showInputOverlay)
-            inputOverlaySurfaceView.setVisible(showInputOverlay)
-        }
-        editInputsMenuItem.configure(isEnabled = isInputOverlayEnabled) {
-            binding.editInputsLayout.visibility = View.VISIBLE
-            binding.finishEditInputsButton.visibility = View.VISIBLE
-            binding.moveInputsButton.performClick()
-        }
-        resetInputOverlayMenuItem.configure(
-            isEnabled = isInputOverlayEnabled,
-            onClick = inputOverlaySurfaceView::resetInputs
-        )
-        exitMenuItem.configure(onClick = onBackPressedDispatcher::onBackPressed)
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun initializeView(launchPath: String) {
         setFullscreen()
 
-        binding = ActivityEmulationBinding.inflate(layoutInflater)
-        mainCanvasTouchListener = CanvasOnTouchListener()
-        binding.mainCanvas.setOnTouchListener(mainCanvasTouchListener)
-        inputOverlaySurfaceView = binding.inputOverlay
+        val gamePath = getGamePath()
 
-        inputOverlaySurfaceView.setVisible(overlaySettings.isOverlayEnabled)
-
-        binding.sideMenu.configureSideMenu()
-        setSwapScreens(emulationScreenSettings.areScreensSwapped)
-        setPadOnExternalDisplay(emulationScreenSettings.isPadOnExternalDisplay)
-
-        binding.moveInputsButton.setOnClickListener { _ ->
-            if (inputOverlaySurfaceView.getInputMode() == InputOverlaySurfaceView.InputMode.EDIT_POSITION) {
-                return@setOnClickListener
-            }
-            binding.resizeInputsButton.alpha = 0.5f
-            binding.moveInputsButton.alpha = 1.0f
-            toastMessage(R.string.input_mode_edit_position)
-            inputOverlaySurfaceView.setInputMode(InputOverlaySurfaceView.InputMode.EDIT_POSITION)
-        }
-        binding.resizeInputsButton.setOnClickListener { _ ->
-            if (inputOverlaySurfaceView.getInputMode() == InputOverlaySurfaceView.InputMode.EDIT_SIZE) {
-                return@setOnClickListener
-            }
-            binding.moveInputsButton.alpha = 0.5f
-            binding.resizeInputsButton.alpha = 1.0f
-            toastMessage(R.string.input_mode_edit_size)
-            inputOverlaySurfaceView.setInputMode(InputOverlaySurfaceView.InputMode.EDIT_SIZE)
-        }
-        binding.finishEditInputsButton.setOnClickListener { _ ->
-            inputOverlaySurfaceView.setInputMode(InputOverlaySurfaceView.InputMode.DEFAULT)
-            binding.finishEditInputsButton.visibility = View.GONE
-            binding.editInputsLayout.visibility = View.GONE
-            toastMessage(R.string.input_mode_default)
-        }
-
-        if (emulationScreenSettings.isDrawerButtonVisible) {
-            binding.emulationSettingsButton.setOnClickListener { binding.drawerLayout.open() }
-            binding.drawerLayout.setLockedMode(true)
-        } else {
-            binding.emulationSettingsButton.visibility = View.GONE
-        }
-
-        val mainCanvas = binding.mainCanvas
-        try {
-            val testSurfaceTexture = SurfaceTexture(0)
-            val testSurface = Surface(testSurfaceTexture)
-            NativeEmulation.initializeRenderer(testSurface)
-            testSurface.release()
-            testSurfaceTexture.release()
-        } catch (exception: NativeException) {
-            onEmulationError(
-                getString(
-                    R.string.failed_initialize_renderer_error,
-                    exception.message
-                )
-            )
-            return
-        }
-
-        val mainCanvasHolder = mainCanvas.holder
-        mainCanvasHolder.addCallback(CanvasSurfaceHolderCallback(CanvasType.MAIN))
-        mainCanvasHolder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-            }
-
-            override fun surfaceChanged(
-                holder: SurfaceHolder,
-                format: Int,
-                width: Int,
-                height: Int,
-            ) {
-                if (hasEmulationError) {
-                    return
-                }
-                if (!isGameRunning) {
-                    isGameRunning = true
-                    startGame(launchPath)
+        setContent {
+            TranslatableContent {
+                ActivityContent {
+                    EmulationScreen(
+                        gamePath = gamePath,
+                        setMotionSensorEnabled = sensorManager::setIsListening,
+                        onQuit = ::onQuit,
+                    )
                 }
             }
-
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-            }
-        })
-        configureMainCanvasTouchListener()
-    }
-
-    private fun toastMessage(@StringRes toastTextResId: Int) {
-        toast?.cancel()
-        toast = Toast.makeText(this, toastTextResId, Toast.LENGTH_SHORT)
-            .also { it.show() }
-    }
-
-    private fun startGame(launchPath: String) {
-        val result = NativeEmulation.startGame(launchPath)
-        if (result == NativeEmulation.START_GAME_SUCCESSFUL) {
-            return
         }
-        val errorMessage = when (result) {
-            NativeEmulation.START_GAME_ERROR_GAME_BASE_FILES_NOT_FOUND -> getString(R.string.game_not_found)
-            NativeEmulation.START_GAME_ERROR_NO_DISC_KEY -> getString(R.string.no_disk_key)
-            NativeEmulation.START_GAME_ERROR_NO_TITLE_TIK -> getString(R.string.no_title_tik)
-            else -> getString(R.string.game_files_unknown_error, launchPath)
-        }
-        onEmulationError(errorMessage)
     }
 
     override fun onPause() {
@@ -574,54 +84,12 @@ class EmulationActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (isMotionEnabled) {
-            sensorManager.startListening()
-        }
+        sensorManager.resumeListening()
     }
-
 
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.pauseListening()
-        dismissPadPresentation()
-        displayManager.unregisterDisplayListener(displayListener)
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createPadCanvas() {
-        if (padCanvas != null) {
-            return
-        }
-        val padCanvas = SurfaceView(this)
-        binding.canvasesLayout.addView(
-            padCanvas,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.0f)
-        )
-        padCanvas.holder.addCallback(CanvasSurfaceHolderCallback(CanvasType.PAD))
-        CanvasOnTouchListener().also { listener ->
-            padCanvas.setOnTouchListener(listener)
-            padCanvasTouchListener = listener
-            configurePadTouchListeners()
-        }
-        this.padCanvas = padCanvas
-    }
-
-    private fun showExitConfirmationDialog() {
-        val builder = MaterialAlertDialogBuilder(this)
-        builder.setTitle(R.string.exit_confirmation_title)
-            .setMessage(R.string.exit_confirm_message)
-            .setPositiveButton(R.string.yes) { _, _ -> quit() }
-            .setNegativeButton(R.string.no) { _, _ -> }
-            .show()
-    }
-
-    private fun onEmulationError(emulationError: String?) {
-        val builder = MaterialAlertDialogBuilder(this)
-        builder.setTitle(R.string.error)
-            .setMessage(emulationError)
-            .setNeutralButton(R.string.quit) { _, _ -> }
-            .setOnDismissListener { _ -> quit() }
-            .show()
     }
 
     private fun setFullscreen() {
@@ -632,71 +100,12 @@ class EmulationActivity : AppCompatActivity() {
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
-    private fun quit() {
-        finishAffinity()
+    private fun onQuit() {
+        finish()
         exitProcess(0)
     }
 
     companion object {
         const val EXTRA_LAUNCH_PATH: String = BuildConfig.APPLICATION_ID + ".LaunchPath"
-        private var emulationActivityInstance: WeakReference<EmulationActivity?> =
-            WeakReference(null)
-
-        /**
-         * This method is called by swkbd using JNI.
-         */
-        @Keep
-        @JvmStatic
-        fun showEmulationTextInput(initialText: String?, maxLength: Int) {
-            val emulationActivity = emulationActivityInstance.get() ?: return
-            if (emulationActivity.emulationTextInputDialog != null) {
-                return
-            }
-            setCurrentInputText(initialText)
-            emulationActivity.runOnUiThread {
-                val inputEditTextLayout =
-                    emulationActivity.layoutInflater.inflate(
-                        R.layout.layout_emulation_input,
-                        null
-                    )
-                val inputEditText =
-                    inputEditTextLayout.requireViewById<EmulationTextInputEditText>(R.id.emulation_input_text)
-                inputEditText.updateText(initialText)
-                val dialog = MaterialAlertDialogBuilder(emulationActivity)
-                    .setView(inputEditTextLayout)
-                    .setCancelable(false)
-                    .setPositiveButton(R.string.done) { _, _ -> }.show()
-                val doneButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)!!
-                doneButton.isEnabled = false
-                doneButton.setOnClickListener { _ -> inputEditText.onFinishedEdit() }
-                inputEditText.setOnTextChangedListener {
-                    doneButton.isEnabled = it.isNotEmpty()
-                }
-                val parentTextInputLayout =
-                    inputEditTextLayout.requireViewById<TextInputLayout>(R.id.emulation_input_layout)
-
-                if (maxLength > 0) {
-                    parentTextInputLayout.isCounterEnabled = true
-                    parentTextInputLayout.counterMaxLength = maxLength
-                    inputEditText.appendFilter(LengthFilter(maxLength))
-                } else {
-                    parentTextInputLayout.isCounterEnabled = false
-                }
-
-                emulationActivity.emulationTextInputDialog = dialog
-            }
-        }
-
-        /**
-         * This method is called by swkbd using JNI.
-         */
-        @Keep
-        @JvmStatic
-        fun hideEmulationTextInput() {
-            val emulationActivity = emulationActivityInstance.get() ?: return
-            val textInputDialog = emulationActivity.emulationTextInputDialog ?: return
-            emulationActivity.emulationTextInputDialog = null
-            emulationActivity.runOnUiThread { textInputDialog.dismiss() }
-        }
     }
 }

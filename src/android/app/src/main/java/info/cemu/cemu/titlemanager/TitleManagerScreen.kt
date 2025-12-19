@@ -8,7 +8,6 @@ package info.cemu.cemu.titlemanager
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.StringRes
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
@@ -22,13 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.TextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,6 +37,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -59,7 +52,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,11 +59,16 @@ import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.viewmodel.compose.viewModel
 import info.cemu.cemu.R
-import info.cemu.cemu.guicore.components.ScreenContentLazy
-import info.cemu.cemu.guicore.format.formatBytes
-import info.cemu.cemu.guicore.nativeenummapper.regionToStringId
+import info.cemu.cemu.common.ui.components.ScreenContentLazy
+import info.cemu.cemu.common.ui.components.formatBytes
+import info.cemu.cemu.common.ui.localization.regionToString
+import info.cemu.cemu.common.ui.localization.tr
 import info.cemu.cemu.nativeinterface.NativeGameTitles
+import info.cemu.cemu.titlemanager.usecases.CompressResult
+import info.cemu.cemu.titlemanager.usecases.DeleteResult
+import info.cemu.cemu.titlemanager.usecases.InstallResult
 import kotlinx.coroutines.launch
+import java.text.MessageFormat
 
 @Composable
 fun TitleManagerScreen(
@@ -91,25 +88,23 @@ fun TitleManagerScreen(
     val currentCompressProgress by titleListViewModel.compressProgress.collectAsState()
     val titleToBeDeleted by titleListViewModel.titleToBeDeleted.collectAsState()
 
-    fun showNotificationMessage(@StringRes stringId: Int) {
+    fun showNotificationMessage(text: String) {
         coroutineScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(context.getString(stringId))
+            snackbarHostState.showSnackbar(text)
         }
     }
 
     fun installQueuedTitle() {
         titleListViewModel.installQueuedTitle(
             context = context,
-            titleInstallCallbacks = object : TitleInstallCallbacks {
-                override fun onInstallFinished() {
-                    showNotificationMessage(R.string.install_title_finished)
+            callback = {
+                when (it) {
+                    InstallResult.ERROR -> showNotificationMessage(tr("Error installing"))
+                    InstallResult.FINISHED -> showNotificationMessage(tr("Finished installing"))
+                    InstallResult.NOT_ENOUGH_SPACE -> showNotificationMessage(tr("Not enough space"))
                 }
-
-                override fun onError() {
-                    showNotificationMessage(R.string.install_title_error)
-                }
-            }
+            },
         )
     }
 
@@ -125,7 +120,7 @@ fun TitleManagerScreen(
             titleListViewModel.queueTitleToInstall(
                 titlePath = documentFile.uri,
                 onInvalidTitle = {
-                    showNotificationMessage(R.string.install_title_invalid_title)
+                    showNotificationMessage(tr("Invalid title"))
                 })
         }
 
@@ -135,39 +130,41 @@ fun TitleManagerScreen(
             titleListViewModel.compressQueuedTitle(
                 context = context,
                 uri = uri,
-                onFinished = {
-                    showNotificationMessage(R.string.wua_convert_finished)
-                },
-                onError = {
-                    showNotificationMessage(R.string.wua_convert_error)
+                onResult = { result ->
+                    {
+                        when (result) {
+                            CompressResult.FINISHED -> showNotificationMessage(tr("Finished converting"))
+                            CompressResult.ERROR -> showNotificationMessage(tr("Error while converting"))
+                        }
+                    }
                 }
             )
         }
 
     ScreenContentLazy(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        appBarText = stringResource(R.string.title_manager_screen_label),
+        appBarText = tr("Title manager"),
         navigateBack = navigateBack,
         actions = {
             IconButton(onClick = {
                 titleListViewModel.refresh()
-                showNotificationMessage(R.string.titles_refreshing_notification)
+                showNotificationMessage(tr("Refreshing titles"))
             }) {
                 Icon(
-                    imageVector = Icons.Filled.Refresh,
-                    contentDescription = stringResource(R.string.title_manager_refresh_titles_description),
+                    painter = painterResource(R.drawable.ic_refresh),
+                    contentDescription = null
                 )
             }
             IconButton(onClick = { showFilterSheet = true }) {
                 Icon(
                     painter = painterResource(R.drawable.ic_filter),
-                    contentDescription = stringResource(R.string.title_manager_filter_titles_description),
+                    contentDescription = null
                 )
             }
             IconButton(onClick = { installTitleLauncher.launch(null) }) {
                 Icon(
                     painter = painterResource(R.drawable.ic_add),
-                    contentDescription = stringResource(R.string.title_manager_install_title_description)
+                    contentDescription = null
                 )
             }
         }
@@ -179,13 +176,10 @@ fun TitleManagerScreen(
                     titleListViewModel.deleteTitleEntry(
                         titleEntry = it,
                         context = context,
-                        deleteCallbacks = object : TitleDeleteCallbacks {
-                            override fun onDeleteFinished() {
-                                showNotificationMessage(R.string.title_entry_delete_notification)
-                            }
-
-                            override fun onError() {
-                                showNotificationMessage(R.string.title_entry_failed_delete_notification)
+                        callback = { result ->
+                            when (result) {
+                                DeleteResult.FINISHED -> showNotificationMessage(tr("Deleted title entry"))
+                                DeleteResult.ERROR -> showNotificationMessage(tr("Failed to delete title entry"))
                             }
                         })
                 },
@@ -242,10 +236,10 @@ fun TitleManagerScreen(
 
 @Composable
 private fun TitleCompressProgressDialog(bytesWritten: Long?, onCancel: () -> Unit) {
-    var showCancelConfirmDialog by remember { mutableStateOf(false) }
+    var showCancelConfirmDialog by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
-        title = { Text(stringResource(R.string.wua_convert_title)) },
+        title = { Text(tr("Compressing title")) },
         text = {
             Column(
                 modifier = Modifier.padding(8.dp),
@@ -253,12 +247,7 @@ private fun TitleCompressProgressDialog(bytesWritten: Long?, onCancel: () -> Uni
             ) {
                 LinearProgressIndicator()
                 if (bytesWritten != null)
-                    Text(
-                        stringResource(
-                            R.string.wua_convert_current_progress,
-                            bytesWritten.formatBytes()
-                        )
-                    )
+                    Text(tr("Current progress: {0}", bytesWritten.formatBytes()))
             }
         },
         onDismissRequest = {},
@@ -266,24 +255,24 @@ private fun TitleCompressProgressDialog(bytesWritten: Long?, onCancel: () -> Uni
         dismissButton = {
             TextButton(
                 onClick = { showCancelConfirmDialog = true },
-                content = { Text(stringResource(R.string.cancel)) },
+                content = { Text(tr("Cancel")) },
             )
         }
     )
 
     if (showCancelConfirmDialog)
         AlertDialog(
-            title = { Text(stringResource(R.string.wua_convert_cancel_title)) },
-            text = { Text(stringResource(R.string.wua_convert_cancel_text)) },
+            title = { Text(tr("Cancel compressing title")) },
+            text = { Text(tr("Do you really want to cancel compressing the title?")) },
             onDismissRequest = { showCancelConfirmDialog = false },
             confirmButton = {
                 TextButton(onClick = onCancel) {
-                    Text(stringResource(R.string.yes))
+                    Text(tr("Yes"))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelConfirmDialog = false }) {
-                    Text(stringResource(R.string.no))
+                    Text(tr("No"))
                 }
             }
         )
@@ -306,11 +295,11 @@ private fun TitleCompressConfirmationDialog(
         Text(
             modifier = Modifier.padding(bottom = 4.dp),
             fontSize = 14.sp,
-            text = entryPrintPath ?: stringResource(R.string.wua_convert_title_not_installed)
+            text = entryPrintPath ?: tr("Not installed")
         )
     }
     AlertDialog(
-        title = { Text(stringResource(R.string.wua_convert_confirmation_title)) },
+        title = { Text(tr("Confirmation")) },
         text = {
             Column(
                 modifier = Modifier
@@ -321,28 +310,28 @@ private fun TitleCompressConfirmationDialog(
                     modifier = Modifier.padding(vertical = 8.dp),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    text = stringResource(R.string.wua_convert_confirmation_description),
+                    text = tr("The following content will be converted to a compressed Wii U archive file (.wua)"),
                 )
                 EntryInfo(
-                    stringResource(R.string.wua_convert_base_game_title_entry),
+                    tr("Base game"),
                     compressTitleInfo.basePrintPath
                 )
                 EntryInfo(
-                    stringResource(R.string.wua_convert_update_title_entry),
+                    tr("Update"),
                     compressTitleInfo.updatePrintPath
                 )
                 EntryInfo(
-                    stringResource(R.string.wua_convert_dlc_title_entry),
+                    tr("DLC"),
                     compressTitleInfo.aocPrintPath
                 )
             }
         },
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(R.string.ok)) }
+            TextButton(onClick = onConfirm) { Text(tr("OK")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onDismiss) { Text(tr("Cancel")) }
         }
     )
 }
@@ -352,10 +341,10 @@ private fun TitleInstallProgressDialog(
     progress: Pair<Long, Long>?,
     onCancel: () -> Unit,
 ) {
-    var showCancelConfirmDialog by remember { mutableStateOf(false) }
+    var showCancelConfirmDialog by rememberSaveable { mutableStateOf(false) }
 
     AlertDialog(
-        title = { Text(stringResource(R.string.install_title_progress_title)) },
+        title = { Text(tr("Installing title")) },
         text = {
             val progressModifiers = Modifier
                 .fillMaxWidth()
@@ -365,7 +354,7 @@ private fun TitleInstallProgressDialog(
                     LinearProgressIndicator(modifier = progressModifiers)
                     Text(
                         modifier = Modifier.padding(8.dp),
-                        text = stringResource(R.string.install_title_parsing_content)
+                        text = tr("Parsing title content...")
                     )
                 } else {
                     val (bytesWritten, maxBytes) = progress
@@ -386,26 +375,26 @@ private fun TitleInstallProgressDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = { showCancelConfirmDialog = true }) {
-                Text(stringResource(R.string.cancel))
+                Text(tr("Cancel"))
             }
         }
     )
 
     if (showCancelConfirmDialog)
         AlertDialog(
-            title = { Text(stringResource(R.string.install_title_cancel_title)) },
+            title = { Text(tr("Cancel installing title")) },
             text = {
-                Text(stringResource(R.string.install_title_cancel_text))
+                Text(tr("Do you really want to cancel the installation process?\n\nCanceling the process will delete the applied files."))
             },
             onDismissRequest = { showCancelConfirmDialog = false },
             confirmButton = {
                 TextButton(onClick = onCancel) {
-                    Text(stringResource(R.string.yes))
+                    Text(tr("Yes"))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelConfirmDialog = false }) {
-                    Text(stringResource(R.string.no))
+                    Text(tr("No"))
                 }
             }
         )
@@ -418,15 +407,18 @@ private fun TitleInstallConfirmDialog(
     onDismissRequest: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+
     val errorMessage = when (error) {
-        is NativeGameTitles.TitleExistsError.DifferentType -> stringResource(
-            R.string.title_exists_error_different_type,
+        is NativeGameTitles.TitleExistsError.DifferentType -> tr(
+            """It seems that there is already a title installed at the target location but it has a different type.
+Currently installed: '{0}' Installing: '{1}'
+Do you still want to continue with the installation? It will replace the currently installed title.""",
             error.oldType,
             error.toInstallType
         )
 
-        NativeGameTitles.TitleExistsError.NewVersion -> stringResource(R.string.title_exists_error_new_version)
-        NativeGameTitles.TitleExistsError.SameVersion -> stringResource(R.string.title_exists_error_same_version)
+        NativeGameTitles.TitleExistsError.NewVersion -> tr("It seems that a newer version is already installed, do you still want to install the older version?")
+        NativeGameTitles.TitleExistsError.SameVersion -> tr("It seems that the selected title is already installed, do you want to reinstall it?")
 
         NativeGameTitles.TitleExistsError.None -> {
             onConfirm()
@@ -437,11 +429,11 @@ private fun TitleInstallConfirmDialog(
     AlertDialog(
         icon = {
             Icon(
-                imageVector = Icons.Filled.Warning,
+                painter = painterResource(R.drawable.ic_warning),
                 contentDescription = null
             )
         },
-        title = { Text(stringResource(R.string.warning)) },
+        title = { Text(tr("Warning")) },
         text = {
             Text(
                 text = errorMessage,
@@ -450,10 +442,10 @@ private fun TitleInstallConfirmDialog(
         },
         onDismissRequest = onDismissRequest,
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(R.string.yes)) }
+            TextButton(onClick = onConfirm) { Text(tr("Yes")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismissRequest) { Text(stringResource(R.string.no)) }
+            TextButton(onClick = onDismissRequest) { Text(tr("No")) }
         }
     )
 }
@@ -477,42 +469,38 @@ private fun TitleFilterBottomSheet(
                 singleLine = true,
                 value = filter.query,
                 onValueChange = titleListViewModel::setFilterQuery,
-                label = { Text(stringResource(R.string.title_manager_search_label)) }
+                label = { Text(tr("Search titles")) }
             )
             FilterRow(
-                filterRowLabel = stringResource(R.string.title_manager_filter_types_label),
+                filterRowLabel = tr("Types"),
                 filterValues = EntryType.entries.map { (it to (it in filter.types)) },
-                valueToLabel = { stringResource(entryTypeToStringId(it)) },
-                onFilterAdded = titleListViewModel.typesFilter::add,
-                onFilterRemoved = titleListViewModel.typesFilter::remove,
+                valueToLabel = { entryTypeToString(it) },
+                onToggle = titleListViewModel::toggleType,
             )
             FilterRow(
-                filterRowLabel = stringResource(R.string.title_manager_filter_formats_label),
+                filterRowLabel = tr("Formats"),
                 filterValues = EntryFormat.entries.map { (it to (it in filter.formats)) },
-                valueToLabel = { stringResource(formatToStringId(it)) },
-                onFilterAdded = titleListViewModel.formatsFilter::add,
-                onFilterRemoved = titleListViewModel.formatsFilter::remove,
+                valueToLabel = { formatToString(it) },
+                onToggle = titleListViewModel::toggleFormat,
             )
             FilterRow(
-                filterRowLabel = stringResource(R.string.title_manager_filter_locations_label),
+                filterRowLabel = tr("Locations"),
                 filterValues = EntryPath.entries.map { (it to (it in filter.paths)) },
-                valueToLabel = { stringResource(pathToStringId(it)) },
-                onFilterAdded = titleListViewModel.pathsFilter::add,
-                onFilterRemoved = titleListViewModel.pathsFilter::remove,
+                valueToLabel = { pathToString(it) },
+                onToggle = titleListViewModel::togglePath,
             )
         }
     }
 }
 
 @Composable
-private fun <T> FilterRow(
+private fun <T : Enum<T>> FilterRow(
     filterRowLabel: String,
     filterValues: List<Pair<T, Boolean>>,
     valueToLabel: @Composable (T) -> String,
-    onFilterAdded: (T) -> Unit,
-    onFilterRemoved: (T) -> Unit,
+    onToggle: (T) -> Unit
 ) {
-    var showOptions by remember { mutableStateOf(false) }
+    var showOptions by rememberSaveable { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .padding(8.dp)
@@ -525,8 +513,8 @@ private fun <T> FilterRow(
             Text(text = filterRowLabel, modifier = Modifier.weight(1f))
             Icon(
                 modifier = Modifier.rotate(if (showOptions) 180f else 0f),
-                imageVector = Icons.Filled.ArrowDropDown,
-                contentDescription = null,
+                painter = painterResource(R.drawable.ic_arrow_drop_down),
+                contentDescription = null
             )
         }
         if (showOptions)
@@ -538,8 +526,7 @@ private fun <T> FilterRow(
                     FilterChip(
                         label = valueToLabel(value),
                         selected = selected,
-                        onAdd = { onFilterAdded(value) },
-                        onRemove = { onFilterRemoved(value) },
+                        onToggle = { onToggle(value) },
                     )
                 }
             }
@@ -547,19 +534,18 @@ private fun <T> FilterRow(
 }
 
 @Composable
-fun FilterChip(label: String, selected: Boolean, onAdd: () -> Unit, onRemove: () -> Unit) {
+fun FilterChip(label: String, selected: Boolean, onToggle: () -> Unit) {
     FilterChip(
         leadingIcon = {
             if (selected)
                 Icon(
-                    imageVector = Icons.Filled.Check,
+                    painter = painterResource(R.drawable.ic_check),
                     contentDescription = null
                 )
         },
         selected = selected,
         onClick = {
-            if (selected) onRemove()
-            else onAdd()
+            onToggle()
         },
         label = { Text(label) }
     )
@@ -582,7 +568,7 @@ private fun TitleEntryListItem(
             .animateContentSize()
             .padding(8.dp),
     ) {
-        var showTitleInfo by remember { mutableStateOf(false) }
+        var showTitleInfo by rememberSaveable { mutableStateOf(false) }
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -608,8 +594,8 @@ private fun TitleEntryListItem(
                 onClick = { showTitleInfo = !showTitleInfo }) {
                 Icon(
                     modifier = Modifier.rotate(if (showTitleInfo) 180f else 0f),
-                    imageVector = Icons.Filled.ArrowDropDown,
-                    contentDescription = stringResource(R.string.title_manager_show_info_description)
+                    painter = painterResource(R.drawable.ic_arrow_drop_down),
+                    contentDescription = null
                 )
             }
         }
@@ -632,7 +618,7 @@ private fun TitleDropDownMenu(
     onDeleteClicked: () -> Unit,
     onCompressClicked: () -> Unit,
 ) {
-    var expandMenu by remember { mutableStateOf(false) }
+    var expandMenu by rememberSaveable { mutableStateOf(false) }
 
     @Composable
     fun DropdownMenuItem(text: String, onClick: () -> Unit) {
@@ -648,17 +634,17 @@ private fun TitleDropDownMenu(
     Box {
         IconButton(onClick = { expandMenu = true }) {
             Icon(
-                imageVector = Icons.Filled.MoreVert,
-                contentDescription = stringResource(R.string.title_dropdown_menu_description)
+                painter = painterResource(R.drawable.ic_more_vert),
+                contentDescription = null
             )
         }
         DropdownMenu(
             expanded = expandMenu,
             onDismissRequest = { expandMenu = false }) {
-            DropdownMenuItem(stringResource(R.string.delete), onDeleteClicked)
+            DropdownMenuItem(tr("Delete"), onDeleteClicked)
             if (titleEntry.type != EntryType.Save && titleEntry.format != EntryFormat.WUA)
                 DropdownMenuItem(
-                    stringResource(R.string.wua_convert_action_label),
+                    tr("Convert to WUA"),
                     onCompressClicked
                 )
         }
@@ -670,25 +656,19 @@ private fun DeleteTitleProgressDialog(titleEntry: TitleEntry) {
     AlertDialog(
         icon = {
             Icon(
-                imageVector = Icons.Filled.Warning,
+                painter = painterResource(R.drawable.ic_warning),
                 contentDescription = null
             )
         },
         title = {
-            Text(stringResource(R.string.delete_title_progress_dialog_title))
+            Text(tr("Deleting"))
         },
         text = {
-            val titleEntryInfo = stringResource(
-                R.string.title_entry_delete_info,
-                titleEntry.name,
-                stringResource(regionToStringId(titleEntry.region)),
-                stringResource(entryTypeToStringId(titleEntry.type))
-            )
             Column(
                 modifier = Modifier.padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(stringResource(R.string.delete_title_title_info, titleEntryInfo))
+                Text(tr("Deleting: {0}", getTitleEntryInfo(titleEntry)))
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -711,24 +691,18 @@ private fun DeleteTitleConfirmationDialog(
     AlertDialog(
         icon = {
             Icon(
-                imageVector = Icons.Filled.Warning,
+                painter = painterResource(R.drawable.ic_warning),
                 contentDescription = null
             )
         },
-        title = { Text(stringResource(R.string.warning)) },
+        title = { Text(tr("Warning")) },
         text = {
-            val titleEntryInfo = stringResource(
-                R.string.title_entry_delete_info,
-                titleEntry.name,
-                stringResource(regionToStringId(titleEntry.region)),
-                stringResource(entryTypeToStringId(titleEntry.type))
-            )
             Column(
                 modifier = Modifier.padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(stringResource(R.string.title_entry_delete_confirmation))
-                Text(titleEntryInfo)
+                Text(tr("Are you really sure you want to delete the following entry?"))
+                Text(getTitleEntryInfo(titleEntry))
             }
         },
         onDismissRequest = onDismissRequest,
@@ -738,14 +712,21 @@ private fun DeleteTitleConfirmationDialog(
                     onDismissRequest()
                     onConfirmDelete()
                 },
-                content = { Text(stringResource(R.string.yes)) },
+                content = { Text(tr("Yes")) },
             )
         },
         dismissButton = {
-            TextButton(onClick = onDismissRequest) { Text(stringResource(R.string.no)) }
+            TextButton(onClick = onDismissRequest) { Text(tr("No")) }
         }
     )
 }
+
+private fun getTitleEntryInfo(titleEntry: TitleEntry) = MessageFormat.format(
+    "[{0}] [{1}] [{2}]",
+    titleEntry.name,
+    regionToString(titleEntry.region),
+    entryTypeToString(titleEntry.type)
+)
 
 @Composable
 private fun TitleEntryIcon(entryType: EntryType, modifier: Modifier = Modifier) {
@@ -759,7 +740,7 @@ private fun TitleEntryIcon(entryType: EntryType, modifier: Modifier = Modifier) 
     Icon(
         modifier = modifier,
         painter = painterResource(iconId),
-        contentDescription = stringResource(entryTypeToStringId(entryType))
+        contentDescription = null
     )
 }
 
@@ -771,29 +752,29 @@ private fun TitleEntryData(titleEntry: TitleEntry) {
             .padding(8.dp)
     ) {
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_id_label),
+            name = tr("Title ID"),
             value = formatTitleId(titleEntry.titleId)
         )
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_type_label),
-            value = stringResource(entryTypeToStringId(titleEntry.type)),
+            name = tr("Type"),
+            value = entryTypeToString(titleEntry.type),
         )
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_version_label),
+            name = tr("Version"),
             value = titleEntry.version.toString(),
         )
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_region_label),
-            value = stringResource(regionToStringId(titleEntry.region)),
+            name = tr("Region"),
+            value = regionToString(titleEntry.region),
         )
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_format_label),
-            value = stringResource(formatToStringId(titleEntry.format)),
+            name = tr("Format"),
+            value = formatToString(titleEntry.format),
         )
         TitleEntryInfo(
-            name = stringResource(R.string.title_info_location_label),
-            value = if (titleEntry.isInMLC) stringResource(R.string.location_mlc)
-            else stringResource(R.string.location_game_paths)
+            name = tr("Location"),
+            value = if (titleEntry.isInMLC) tr("MLC")
+            else tr("Game paths")
         )
     }
 }
@@ -822,29 +803,26 @@ private fun TitleEntryInfo(name: String, value: String) {
     )
 }
 
-@StringRes
-private fun formatToStringId(entryFormat: EntryFormat) = when (entryFormat) {
-    EntryFormat.Folder -> R.string.entry_format_folder
-    EntryFormat.WUD -> R.string.entry_format_wud
-    EntryFormat.NUS -> R.string.entry_format_nus
-    EntryFormat.WUA -> R.string.entry_format_wua
-    EntryFormat.WUHB -> R.string.entry_format_wuhb
-    EntryFormat.SaveFolder -> R.string.entry_format_save_folder
+private fun formatToString(entryFormat: EntryFormat) = when (entryFormat) {
+    EntryFormat.Folder -> tr("Folder")
+    EntryFormat.WUD -> tr("WUD")
+    EntryFormat.NUS -> tr("NUS")
+    EntryFormat.WUA -> tr("WUA")
+    EntryFormat.WUHB -> tr("WUHB")
+    EntryFormat.SaveFolder -> tr("Save folder")
 }
 
-@StringRes
-private fun pathToStringId(entryPath: EntryPath) = when (entryPath) {
-    EntryPath.MLC -> R.string.location_mlc
-    EntryPath.GamePaths -> R.string.location_game_paths
+private fun pathToString(entryPath: EntryPath) = when (entryPath) {
+    EntryPath.MLC -> tr("MLC")
+    EntryPath.GamePaths -> tr("Game paths")
 }
 
-@StringRes
-private fun entryTypeToStringId(entryType: EntryType) = when (entryType) {
-    EntryType.Base -> R.string.entry_type_base
-    EntryType.Update -> R.string.entry_type_update
-    EntryType.Dlc -> R.string.entry_type_dlc
-    EntryType.Save -> R.string.entry_type_save
-    EntryType.System -> R.string.entry_type_system
+private fun entryTypeToString(entryType: EntryType) = when (entryType) {
+    EntryType.Base -> tr("Base")
+    EntryType.Update -> tr("Update")
+    EntryType.Dlc -> tr("DLC")
+    EntryType.Save -> tr("Save")
+    EntryType.System -> tr("System")
 }
 
 private fun formatTitleId(titleId: Long) =

@@ -1,4 +1,5 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "WindowSystem.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
 #include "Cafe/GameProfile/GameProfile.h"
 #include "Cafe/HW/Espresso/Interpreter/PPCInterpreterInternal.h"
@@ -32,10 +33,10 @@
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
 #include "Cafe/IOSU/legacy/iosu_mcp.h"
 #include "Cafe/IOSU/legacy/iosu_acp.h"
-#include "Cafe/IOSU/legacy/iosu_boss.h"
 #include "Cafe/IOSU/legacy/iosu_nim.h"
 #include "Cafe/IOSU/PDM/iosu_pdm.h"
 #include "Cafe/IOSU/ccr_nfc/iosu_ccr_nfc.h"
+#include "Cafe/IOSU/nn/boss/boss_service.h"
 
 // IOSU initializer functions
 #include "Cafe/IOSU/kernel/iosu_kernel.h"
@@ -68,12 +69,12 @@
 
 #if BOOST_OS_LINUX
 #include <sys/sysinfo.h>
-#elif BOOST_OS_MACOS
+#elif BOOST_OS_MACOS || BOOST_OS_BSD
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #endif
 
-#if __ANDROID__
+#if BOOST_PLAT_ANDROID
 #include <android/api-level.h>
 #endif
 
@@ -172,7 +173,7 @@ void LoadMainExecutable()
 		applicationRPX = RPLLoader_LoadFromMemory(rpxData, rpxSize, (char*)_pathToExecutable.c_str());
 		if (!applicationRPX)
 		{
-			cemuLog_log(LogType::Force, "Failed to run this title because the executable is damaged");
+			WindowSystem::ShowErrorDialog(_tr("Failed to run this title because the executable is damaged"));
 			cemuLog_createLogFile(false);
 			cemuLog_waitForFlush();
 			exit(0);
@@ -252,7 +253,17 @@ void InfoLog_PrintActiveSettings()
 	if (ActiveSettings::GetGraphicsAPI() == GraphicAPI::kVulkan)
 	{
 		cemuLog_log(LogType::Force, "Async compile: {}", GetConfig().async_compile.GetValue() ? "true" : "false");
-		if(!GetConfig().vk_accurate_barriers.GetValue())
+		if (!GetConfig().vk_accurate_barriers.GetValue())
+			cemuLog_log(LogType::Force, "Accurate barriers are disabled!");
+	}
+	else if (ActiveSettings::GetGraphicsAPI() == GraphicAPI::kMetal)
+	{
+	    cemuLog_log(LogType::Force, "Async compile: {}", GetConfig().async_compile.GetValue() ? "true" : "false");
+	    cemuLog_log(LogType::Force, "Force mesh shaders: {}", GetConfig().force_mesh_shaders.GetValue() ? "true" : "false");
+		cemuLog_log(LogType::Force, "Fast math: {}", g_current_game_profile->GetShaderFastMath() ? "true" : "false");
+		cemuLog_log(LogType::Force, "Buffer cache type: {}", g_current_game_profile->GetBufferCacheMode());
+		cemuLog_log(LogType::Force, "Position invariance: {}", g_current_game_profile->GetPositionInvariance());
+		if (!GetConfig().vk_accurate_barriers.GetValue())
 			cemuLog_log(LogType::Force, "Accurate barriers are disabled!");
 	}
 	cemuLog_log(LogType::Force, "Console language: {}", stdx::to_underlying(config.console_language.GetValue()));
@@ -357,9 +368,7 @@ uint32 LoadSharedData()
 
 void cemu_initForGame()
 {
-	auto cafeSystemCallbacks = CafeSystem::getCafeSystemCallbacks();
-	if (cafeSystemCallbacks)
-		cafeSystemCallbacks->updateWindowTitles(false, true, 0.0);
+	WindowSystem::UpdateWindowTitles(false, true, 0.0);
 	// input manager apply game profile
 	InputManager::instance().apply_game_profile();
 	// log info for launched title
@@ -455,6 +464,8 @@ namespace CafeSystem
 	bool sSystemRunning = false;
 	TitleId sForegroundTitleId = 0;
 
+	bool sTitlePaused = false;
+
 	GameInfo2 sGameInfo_ForegroundTitle;
 
 
@@ -494,6 +505,12 @@ namespace CafeSystem
 		int result = sysctlbyname("hw.memsize", &totalRam, &size, NULL, 0);
 		if (result == 0)
 			cemuLog_log(LogType::Force, "RAM: {}MB", (totalRam / 1024LL / 1024LL));
+		#elif BOOST_OS_BSD
+		int64_t totalRam;
+		size_t size = sizeof(totalRam);
+		int result = sysctlbyname("hw.physmem", &totalRam, &size, NULL, 0);
+		if (result == 0)
+			cemuLog_log(LogType::Force, "RAM: {}MB", (totalRam / 1024LL / 1024LL));
 		#endif
 	}
 
@@ -523,7 +540,7 @@ namespace CafeSystem
 	{
 		std::string buffer;
 		const char* platform = NULL;
-		#if __ANDROID__
+		#if BOOST_PLAT_ANDROID
         buffer = fmt::format("Android (API level {})", android_get_device_api_level());;
 		platform = buffer.c_str();
 		#elif BOOST_OS_WINDOWS
@@ -545,6 +562,16 @@ namespace CafeSystem
 			platform = "Linux";
 		#elif BOOST_OS_MACOS
 		platform = "MacOS";
+		#elif BOOST_OS_BSD
+		#if defined(__FreeBSD__)
+		platform = "FreeBSD";
+		#elif defined(__OpenBSD__)
+		platform = "OpenBSD";
+		#elif defined(__NetBSD__)
+		platform = "NetBSD";
+		#else
+		platform = "Unknown BSD";
+		#endif
 		#endif
 		cemuLog_log(LogType::Force, "Platform: {}", platform);
 	}
@@ -557,6 +584,7 @@ namespace CafeSystem
 		iosu::fpd::GetModule(),
 		iosu::pdm::GetModule(),
 		iosu::ccr_nfc::GetModule(),
+		iosu::boss::GetModule()
 	};
 
 	// initialize all subsystems which are persistent and don't depend on a game running
@@ -595,7 +623,6 @@ namespace CafeSystem
 		iosu::iosuMcp_init();
 		iosu::mcp::Init();
 		iosu::iosuAcp_init();
-		iosu::boss_init();
 		iosu::nim::Initialize();
 		iosu::odm::Initialize();
 		// init Cafe OS
@@ -874,9 +901,7 @@ namespace CafeSystem
 		PPCTimer_waitForInit();
 		// start system
 		sSystemRunning = true;
-		auto cafeSystemCallbacks = CafeSystem::getCafeSystemCallbacks();
-		if (cafeSystemCallbacks)
-			cafeSystemCallbacks->notifyGameLoaded();
+		WindowSystem::NotifyGameLoaded();
 		std::thread t(_LaunchTitleThread);
 		t.detach();
 	}
@@ -884,6 +909,30 @@ namespace CafeSystem
 	bool IsTitleRunning()
 	{
 		return sSystemRunning;
+	}
+
+	void PauseTitle()
+	{
+		if (!sSystemRunning || sTitlePaused)
+		{
+			return;
+		}
+
+		sTitlePaused = true;
+
+		coreinit::SuspendActiveThreads();
+	}
+
+	void ResumeTitle()
+	{
+		if (!sSystemRunning || !sTitlePaused)
+		{
+			return;
+		}
+
+		sTitlePaused = false;
+
+		coreinit::ResumeActiveThreads();
 	}
 
 	TitleId GetForegroundTitleId()
@@ -1035,7 +1084,7 @@ namespace CafeSystem
 	{
 		// starting with Cemu 1.27.0 /vol/storage_mlc01/ is virtualized, meaning that it doesn't point to one singular host os folder anymore
 		// instead it now uses a more complex solution to source titles with various formats (folder, wud, wua) from the game paths and host mlc path
-		
+
 		// todo - mount /vol/storage_mlc01/ with base priority to the host mlc?
 
 		// since mounting titles is an expensive operation we have to avoid mounting all titles at once

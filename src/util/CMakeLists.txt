@@ -37,6 +37,7 @@ add_library(CemuUtil
   helpers/StringParser.h
   helpers/SystemException.h
   helpers/TempState.h
+  helpers/ZArchiveHelpers.h
   highresolutiontimer/HighResolutionTimer.cpp
   highresolutiontimer/HighResolutionTimer.h
   ImageWriter/bmp.h
@@ -97,9 +98,5 @@ if(ANDROID)
 endif()
 
 target_link_libraries(CemuUtil PRIVATE
-	CemuCommon
-	CemuConfig
-	Boost::headers
-	Boost::nowide
-	OpenSSL::Crypto
+  CemuCommon
 )

@@ -6,14 +6,17 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 
 object NativeGameTitles {
-    const val CONSOLE_REGION_JPN: Int = 0x1
-    const val CONSOLE_REGION_USA: Int = 0x2
-    const val CONSOLE_REGION_EUR: Int = 0x4
-    const val CONSOLE_REGION_AUS_DEPR: Int = 0x8
-    const val CONSOLE_REGION_CHN: Int = 0x10
-    const val CONSOLE_REGION_KOR: Int = 0x20
-    const val CONSOLE_REGION_TWN: Int = 0x40
-    const val CONSOLE_REGION_AUTO: Int = 0xFF
+    object ConsoleRegion {
+        const val JPN: Int = 0x1
+        const val USA: Int = 0x2
+        const val EUR: Int = 0x4
+        const val AUS_DEPR: Int = 0x8
+        const val CHN: Int = 0x10
+        const val KOR: Int = 0x20
+        const val TWN: Int = 0x40
+        const val AUTO: Int = 0xFF
+    }
+
 
     @JvmStatic
     external fun isLoadingSharedLibrariesForTitleEnabled(gameTitleId: Long): Boolean
@@ -21,10 +24,13 @@ object NativeGameTitles {
     @JvmStatic
     external fun setLoadingSharedLibrariesForTitleEnabled(gameTitleId: Long, enabled: Boolean)
 
-    const val CPU_MODE_SINGLECOREINTERPRETER: Int = 0
-    const val CPU_MODE_SINGLECORERECOMPILER: Int = 1
-    const val CPU_MODE_MULTICORERECOMPILER: Int = 3
-    const val CPU_MODE_AUTO: Int = 4
+    object CPUMode {
+        const val SINGLECOREINTERPRETER: Int = 0
+        const val SINGLECORERECOMPILER: Int = 1
+        const val MULTICORERECOMPILER: Int = 3
+        const val AUTO: Int = 4
+    }
+
 
     @JvmStatic
     external fun getCpuModeForTitle(gameTitleId: Long): Int
@@ -32,7 +38,7 @@ object NativeGameTitles {
     @JvmStatic
     external fun setCpuModeForTitle(gameTitleId: Long, cpuMode: Int)
 
-    val THREAD_QUANTUM_VALUES: IntArray = intArrayOf(
+    val THREAD_QUANTUM_VALUES = listOf(
         20000,
         45000,
         60000,
@@ -51,6 +57,24 @@ object NativeGameTitles {
 
     @JvmStatic
     external fun setShaderMultiplicationAccuracyForTitleEnabled(gameTitleId: Long, enabled: Boolean)
+
+    object DriverSettingMode {
+        const val GLOBAL: Int = 0
+        const val SYSTEM: Int = 1
+        const val CUSTOM: Int = 2
+    }
+
+    @Keep
+    data class DriverSetting(
+        val mode: Int,
+        val customPath: String? = null,
+    )
+
+    @JvmStatic
+    external fun getDriverSettingForTitle(gameTitleId: Long): DriverSetting
+
+    @JvmStatic
+    external fun setDriverSettingForTitle(gameTitleId: Long, driverSetting: DriverSetting)
 
     @JvmStatic
     external fun titleHasShaderCacheFiles(gameTitleId: Long): Boolean
@@ -73,7 +97,7 @@ object NativeGameTitles {
     @Keep
     data class Game(
         val titleId: Long,
-        val path: String?,
+        val path: String,
         val name: String?,
         val version: Short,
         val dlc: Short,
@@ -101,11 +125,15 @@ object NativeGameTitles {
             return name?.compareTo(other.name ?: "") ?: 0
         }
 
-        val icon: ImageBitmap? = _icon?.asImageBitmap()
+        private var iconBitmap: ImageBitmap? = null
+        val icon: ImageBitmap?
+            get() {
+                if (iconBitmap == null) {
+                    iconBitmap = _icon?.asImageBitmap()
+                }
 
-        fun isValid(): Boolean {
-            return !path.isNullOrEmpty() && !name.isNullOrEmpty()
-        }
+                return iconBitmap
+            }
     }
 
     @Keep
@@ -131,22 +159,26 @@ object NativeGameTitles {
     @JvmStatic
     external fun setSaveListCallback(saveListCallback: SaveListCallback?)
 
-    const val TITLE_TYPE_UNKNOWN: Int = 0xFF;
-    const val TITLE_TYPE_BASE_TITLE: Int = 0x00;
-    const val TITLE_TYPE_BASE_TITLE_DEMO: Int = 0x02;
-    const val TITLE_TYPE_BASE_TITLE_UPDATE: Int = 0x0E;
-    const val TITLE_TYPE_HOMEBREW: Int = 0x0F;
-    const val TITLE_TYPE_AOC: Int = 0x0C;
-    const val TITLE_TYPE_SYSTEM_TITLE: Int = 0x10;
-    const val TITLE_TYPE_SYSTEM_DATA: Int = 0x1B;
-    const val TITLE_TYPE_SYSTEM_OVERLAY_TITLE: Int = 0x30;
+    object TitleType {
+        const val UNKNOWN: Int = 0xFF
+        const val BASE_TITLE: Int = 0x00
+        const val BASE_TITLE_DEMO: Int = 0x02
+        const val BASE_TITLE_UPDATE: Int = 0x0E
+        const val HOMEBREW: Int = 0x0F
+        const val AOC: Int = 0x0C
+        const val SYSTEM_TITLE: Int = 0x10
+        const val SYSTEM_DATA: Int = 0x1B
+        const val SYSTEM_OVERLAY_TITLE: Int = 0x30
+    }
 
-    const val TITLE_DATA_FORMAT_HOST_FS: Int = 1;
-    const val TITLE_DATA_FORMAT_WUD: Int = 2;
-    const val TITLE_DATA_FORMAT_WIIU_ARCHIVE: Int = 3;
-    const val TITLE_DATA_FORMAT_NUS: Int = 4;
-    const val TITLE_DATA_FORMAT_WUHB: Int = 5;
-    const val TITLE_DATA_FORMAT_INVALID_STRUCTURE: Int = 0;
+    object TitleDataFormat {
+        const val HOST_FS: Int = 1
+        const val WUD: Int = 2
+        const val WIIU_ARCHIVE: Int = 3
+        const val NUS: Int = 4
+        const val WUHB: Int = 5
+        const val INVALID_STRUCTURE: Int = 0
+    }
 
     @Keep
     data class TitleData(
@@ -221,6 +253,17 @@ object NativeGameTitles {
 
     @JvmStatic
     external fun compressQueuedTitle(fd: Int, compressCallbacks: TitleCompressCallbacks)
+
+    enum class CompressResult {
+        FINISHED,
+        ERROR,
+    }
+
+    fun compressQueuedTitle(fd: Int, callback: (CompressResult) -> Unit) =
+        compressQueuedTitle(fd, object : TitleCompressCallbacks {
+            override fun onFinished() = callback(CompressResult.FINISHED)
+            override fun onError() = callback(CompressResult.ERROR)
+        })
 
     @JvmStatic
     external fun getCurrentProgressForCompression(): Long

@@ -1,26 +1,28 @@
 package info.cemu.cemu.graphicpacks
 
 import android.content.Context
+import info.cemu.cemu.BuildConfig
+import info.cemu.cemu.common.io.unzip
 import info.cemu.cemu.nativeinterface.NativeGraphicPacks
-import info.cemu.cemu.utils.unzip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.executeAsync
+import okhttp3.coroutines.executeAsync
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import kotlin.io.path.div
 import kotlin.io.path.readText
 
-sealed class GraphicPacksDownloadStatus {
-    data object CheckingForUpdates : GraphicPacksDownloadStatus()
-    data object NoUpdatesAvailable : GraphicPacksDownloadStatus()
-    data object Downloading : GraphicPacksDownloadStatus()
-    data object FinishedDownloading : GraphicPacksDownloadStatus()
-    data object Error : GraphicPacksDownloadStatus()
-    data object Canceled : GraphicPacksDownloadStatus()
+enum class GraphicPacksDownloadStatus {
+    CHECKING_VERSION,
+    NO_UPDATES_AVAILABLE,
+    DOWNLOADING,
+    EXTRACTING,
+    FINISHED_DOWNLOADING,
+    ERROR,
+    CANCELED
 }
 
 class GraphicPacksDownloader {
@@ -29,7 +31,7 @@ class GraphicPacksDownloader {
             graphicPacksDir.toPath() / "downloadedGraphicPacks" / "version.txt"
         return try {
             graphicPacksVersionFile.readText()
-        } catch (ignored: IOException) {
+        } catch (_: IOException) {
             null
         }
     }
@@ -40,31 +42,53 @@ class GraphicPacksDownloader {
     ) {
         val graphicPacksRootDir = context.getExternalFilesDir(null)
         if (graphicPacksRootDir == null) {
-            updateStatus(GraphicPacksDownloadStatus.Error)
+            updateStatus(GraphicPacksDownloadStatus.ERROR)
             return
         }
+
         val graphicPacksDirPath = graphicPacksRootDir.toPath() / "graphicPacks"
         checkForNewUpdate(graphicPacksDirPath.toFile(), updateStatus)
+    }
+
+    private suspend fun getUpdateUrl(): String {
+        val queryUrl = "https://cemu.info/api2/query_graphicpack_url.php?" +
+                "version=${BuildConfig.VERSION_NAME}" +
+                "&t=${System.currentTimeMillis()}"
+
+        val request = Request.Builder()
+            .url(queryUrl)
+            .build()
+
+        Client.newCall(request).executeAsync().use { response ->
+            if (response.isSuccessful) {
+                val body = response.body.string().trim()
+                if (body.startsWith("http")) {
+                    return body
+                }
+            }
+        }
+
+        return "https://api.github.com/repos/cemu-project/cemu_graphic_packs/releases/latest"
     }
 
     private suspend fun checkForNewUpdate(
         graphicPacksDir: File,
         updateStatus: suspend (GraphicPacksDownloadStatus) -> Unit
     ) {
-        updateStatus(GraphicPacksDownloadStatus.CheckingForUpdates)
+        updateStatus(GraphicPacksDownloadStatus.CHECKING_VERSION)
         val request = Request.Builder()
-            .url(GITHUB_RELEASES_API_URL)
+            .url(getUpdateUrl())
             .build()
         Client.newCall(request).executeAsync().use { response ->
             withContext(Dispatchers.IO) {
                 if (!response.isSuccessful) {
-                    updateStatus(GraphicPacksDownloadStatus.Error)
+                    updateStatus(GraphicPacksDownloadStatus.ERROR)
                     return@withContext
                 }
                 val json = JSONObject(response.body.string())
                 val version = json.getString("name")
                 if (getCurrentVersion(graphicPacksDir) == version) {
-                    updateStatus(GraphicPacksDownloadStatus.NoUpdatesAvailable)
+                    updateStatus(GraphicPacksDownloadStatus.NO_UPDATES_AVAILABLE)
                     return@withContext
                 }
                 val downloadUrl = json.getJSONArray("assets")
@@ -81,21 +105,26 @@ class GraphicPacksDownloader {
         version: String,
         updateStatus: suspend (GraphicPacksDownloadStatus) -> Unit
     ) {
-        updateStatus(GraphicPacksDownloadStatus.Downloading)
+        updateStatus(GraphicPacksDownloadStatus.DOWNLOADING)
+
         val request = Request.Builder()
             .url(downloadUrl)
             .build()
+
         Client.newCall(request).executeAsync().use { response ->
             withContext(Dispatchers.IO) {
                 if (!response.isSuccessful) {
-                    updateStatus(GraphicPacksDownloadStatus.Error)
+                    updateStatus(GraphicPacksDownloadStatus.ERROR)
                     return@withContext
                 }
+
+                updateStatus(GraphicPacksDownloadStatus.EXTRACTING)
+
                 val graphicPacksTempDir = graphicPacksDir.resolve("downloadedGraphicPacksTemp")
                 graphicPacksTempDir.deleteRecursively()
                 unzip(
                     response.body.byteStream(),
-                    graphicPacksTempDir.path.toString()
+                    graphicPacksTempDir.path
                 )
                 graphicPacksTempDir.resolve("version.txt").writeText(version)
                 val downloadedGraphicPacksDir =
@@ -103,14 +132,13 @@ class GraphicPacksDownloader {
                 downloadedGraphicPacksDir.deleteRecursively()
                 graphicPacksTempDir.renameTo(downloadedGraphicPacksDir)
                 NativeGraphicPacks.refreshGraphicPacks()
-                updateStatus(GraphicPacksDownloadStatus.FinishedDownloading)
+
+                updateStatus(GraphicPacksDownloadStatus.FINISHED_DOWNLOADING)
             }
         }
     }
 
     companion object {
         private val Client = OkHttpClient()
-        private const val GITHUB_RELEASES_API_URL =
-            "https://api.github.com/repos/cemu-project/cemu_graphic_packs/releases/latest"
     }
 }

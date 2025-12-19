@@ -22,6 +22,16 @@ namespace JNIUtils
 		return env->NewStringUTF(str.c_str());
 	}
 
+	inline jstring toJString(JNIEnv* env, std::string_view str)
+	{
+		return toJString(env, std::string(str));
+	}
+
+	inline jstring toJString(JNIEnv* env, std::wstring_view str)
+	{
+		return toJString(env, boost::nowide::narrow(str));
+	}
+
 	jobject createJavaStringArrayList(JNIEnv* env, const std::vector<std::string>& stringList);
 
 	jobject createJavaStringArrayList(JNIEnv* env, const std::vector<std::wstring>& stringList);
@@ -101,7 +111,7 @@ namespace JNIUtils
 			}
 			return *this;
 		}
-		jobject& operator*()
+		const jobject& operator*() const
 		{
 			return m_jobject;
 		}
@@ -137,6 +147,12 @@ namespace JNIUtils
 			other.m_jclass = nullptr;
 		}
 
+		explicit Scopedjclass(jclass javaClass)
+		{
+			if (javaClass)
+				m_jclass = static_cast<jclass>(ScopedJNIENV()->NewGlobalRef(javaClass));
+		}
+
 		Scopedjclass& operator=(Scopedjclass&& other) noexcept
 		{
 			if (this != &other)
@@ -168,7 +184,7 @@ namespace JNIUtils
 			return m_jclass != nullptr;
 		}
 
-		jclass& operator*()
+		const jclass& operator*() const
 		{
 			return m_jclass;
 		}

@@ -13,12 +13,12 @@
 
 #include "Cafe/CafeSystem.h"
 
-#include "Cemu/GuiSystem/GuiSystem.h"
 #include "util/helpers/helpers.h"
 #include "util/helpers/StringHelpers.h"
 
 #include "config/ActiveSettings.h"
 #include "config/CemuConfig.h"
+#include "WindowSystem.h"
 
 #include "imgui/imgui_extension.h"
 #include "imgui/imgui_impl_vulkan.h"
@@ -27,6 +27,7 @@
 
 #include "Cafe/HW/Latte/Core/LatteTiming.h" // vsync control
 
+#include <cstdint>
 #include <glslang/Public/ShaderLang.h>
 
 #ifndef VK_API_VERSION_MAJOR
@@ -54,7 +55,7 @@ const  std::vector<const char*> kOptionalDeviceExtensions =
 const std::vector<const char*> kRequiredDeviceExtensions =
 {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-#if !__ANDROID__
+#if !BOOST_PLAT_ANDROID
 	VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME
 #endif
 }; // Intel doesnt support VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME
@@ -66,7 +67,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(VkDebugUtilsMessageSeverityFla
 	if (strstr(pCallbackData->pMessage, "consumes input location"))
 		return VK_FALSE; // false means we dont care
 	if (strstr(pCallbackData->pMessage, "blend"))
-		return VK_FALSE; // 
+		return VK_FALSE; //
 
 	// note: Check if previously used location in VK_EXT_debug_report callback is the same as messageIdNumber under the new extension
 	// validation errors which are difficult to fix
@@ -111,18 +112,16 @@ std::vector<VulkanRenderer::DeviceInfo> VulkanRenderer::GetDevices()
 	requiredExtensions.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
 	#if BOOST_OS_WINDOWS
 	requiredExtensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-    #elif BOOST_OS_LINUX
-    #if __ANDROID__
+	#elif BOOST_PLAT_ANDROID
 	requiredExtensions.emplace_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
-    #else
-	auto backend = GuiSystem::getWindowInfo().window_main.backend;
-	if(backend == GuiSystem::WindowHandleInfo::Backend::X11)
+	#elif BOOST_OS_LINUX || BOOST_OS_BSD
+	auto backend = WindowSystem::GetWindowInfo().window_main.backend;
+	if(backend == WindowSystem::WindowHandleInfo::Backend::X11)
 		requiredExtensions.emplace_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
 	#ifdef HAS_WAYLAND
-	else if (backend == GuiSystem::WindowHandleInfo::Backend::Wayland)
+	else if (backend == WindowSystem::WindowHandleInfo::Backend::Wayland)
 		requiredExtensions.emplace_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
     #endif // HAS_WAYLAND
-    #endif // __ANDROID__
     #elif BOOST_OS_MACOS
 	requiredExtensions.emplace_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
 	#endif
@@ -159,7 +158,7 @@ std::vector<VulkanRenderer::DeviceInfo> VulkanRenderer::GetDevices()
 			throw std::runtime_error("Failed to find a GPU with Vulkan support.");
 
 		// create tmp surface to create a logical device
-		auto surface = CreateFramebufferSurface(instance, GuiSystem::getWindowInfo().window_main);
+		auto surface = CreateFramebufferSurface(instance, WindowSystem::GetWindowInfo().window_main);
 		std::vector<VkPhysicalDevice> devices(device_count);
 		vkEnumeratePhysicalDevices(instance, &device_count, devices.data());
 		for (const auto& device : devices)
@@ -313,8 +312,12 @@ void VulkanRenderer::GetDeviceFeatures()
 		cemuLog_log(LogType::Force, "Shader round mode control not available on this device or driver. Some rendering issues might occur.");
 
 	if (!m_featureControl.deviceExtensions.pipeline_creation_cache_control)
+	{
 		cemuLog_log(LogType::Force, "VK_EXT_pipeline_creation_cache_control not supported. Cannot use asynchronous shader and pipeline compilation");
-
+		// if async shader compilation is enabled show warning message
+		if (GetConfig().async_compile)
+			LatteOverlay_pushNotification(_tr("Async shader compile is enabled but not supported by the graphics driver\nCemu will use synchronous compilation which can cause additional stutter"), 10000);
+	}
 	if (!m_featureControl.deviceExtensions.custom_border_color_without_format)
 	{
 		if (m_featureControl.deviceExtensions.custom_border_color)
@@ -406,11 +409,11 @@ VulkanRenderer::VulkanRenderer()
 		throw std::runtime_error("Failed to find a GPU with Vulkan support.");
 
 	// create tmp surface to create a logical device
-	auto surface = CreateFramebufferSurface(m_instance, GuiSystem::getWindowInfo().window_main);
+	auto surface = CreateFramebufferSurface(m_instance, WindowSystem::GetWindowInfo().window_main);
 
 	auto& config = GetConfig();
-	decltype(config.graphic_device_uuid) zero{};
-	const bool has_device_set = config.graphic_device_uuid != zero;
+	decltype(config.vk_graphic_device_uuid) zero{};
+	const bool has_device_set = config.vk_graphic_device_uuid != zero;
 
 	VkPhysicalDevice fallbackDevice = VK_NULL_HANDLE;
 
@@ -430,7 +433,7 @@ VulkanRenderer::VulkanRenderer()
 				physDeviceProps.pNext = &physDeviceIDProps;
 				vkGetPhysicalDeviceProperties2(device, &physDeviceProps);
 
-				if (memcmp(config.graphic_device_uuid.data(), physDeviceIDProps.deviceUUID, VK_UUID_SIZE) != 0)
+				if (memcmp(config.vk_graphic_device_uuid.data(), physDeviceIDProps.deviceUUID, VK_UUID_SIZE) != 0)
 					continue;
 			}
 
@@ -443,7 +446,7 @@ VulkanRenderer::VulkanRenderer()
 	{
 		cemuLog_log(LogType::Force, "The selected GPU could not be found or is not suitable. Falling back to first available device instead");
 		m_physicalDevice = fallbackDevice;
-		config.graphic_device_uuid = {}; // resetting device selection
+		config.vk_graphic_device_uuid = {}; // resetting device selection
 	}
 	else if (m_physicalDevice == VK_NULL_HANDLE)
 	{
@@ -452,8 +455,6 @@ VulkanRenderer::VulkanRenderer()
 	}
 
 	CheckDeviceExtensionSupport(m_physicalDevice, m_featureControl); // todo - merge this with GetDeviceFeatures and separate from IsDeviceSuitable?
-	if (m_featureControl.debugMarkersSupported)
-		cemuLog_log(LogType::Force, "Debug: Frame debugger attached, will use vkDebugMarkerSetObjectNameEXT");
 
 	DetermineVendor();
 	GetDeviceFeatures();
@@ -586,10 +587,14 @@ VulkanRenderer::VulkanRenderer()
 		debugCallback.pfnUserCallback = &DebugUtilsCallback;
 
 		vkCreateDebugUtilsMessengerEXT(m_instance, &debugCallback, nullptr, &m_debugCallback);
+
+		cemuLog_log(LogType::Force, "Debug: Vulkan validation layer enabled, vkCreateDebugUtilsMessengerEXT will be used to log validation errors");
 	}
 
-	if (m_featureControl.instanceExtensions.debug_utils)
-		cemuLog_log(LogType::Force, "Using available debug function: vkCreateDebugUtilsMessengerEXT()");
+	if (this->IsTracingToolEnabled())
+		cemuLog_log(LogType::Force, "Debug: Tracing tool detected, will recompile all shaders with debug info enabled. This disables the SPIR-V cache.");
+	if (this->IsDebugMarkersEnabled())
+		cemuLog_log(LogType::Force, "Debug: Detected tool capable of using debug markers, will use vkDebugMarkerSetObjectNameEXT to identify Vulkan objects");
 
 	// set initial viewport and scissor box size
 	m_state.currentViewport.width = 4;
@@ -781,7 +786,7 @@ VulkanRenderer* VulkanRenderer::GetInstance()
 
 void VulkanRenderer::InitializeSurface(const Vector2i& size, bool mainWindow)
 {
-	auto& windowHandleInfo = mainWindow ? GuiSystem::getWindowInfo().canvas_main : GuiSystem::getWindowInfo().canvas_pad;
+	auto& windowHandleInfo = mainWindow ? WindowSystem::GetWindowInfo().canvas_main : WindowSystem::GetWindowInfo().canvas_pad;
 
 	if (mainWindow)
 	{
@@ -822,8 +827,7 @@ bool VulkanRenderer::IsPadWindowActive()
 
 void VulkanRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool padView)
 {
-	const bool hasScreenshotRequest = std::exchange(m_screenshot_requested, false);
-	if (!hasScreenshotRequest && m_screenshot_state == ScreenshotState::None)
+	if (!m_screenshot_requested && m_screenshot_state == ScreenshotState::None)
 		return;
 
 	if (IsSwapchainInfoValid(false))
@@ -1276,8 +1280,9 @@ bool VulkanRenderer::CheckDeviceExtensionSupport(const VkPhysicalDevice device, 
 	// dynamic rendering doesn't provide any benefits for us right now. Driver implementations are very unoptimized as of Feb 2022
 	info.deviceExtensions.present_wait = isExtensionAvailable(VK_KHR_PRESENT_WAIT_EXTENSION_NAME) && isExtensionAvailable(VK_KHR_PRESENT_ID_EXTENSION_NAME);
 
-	// check for framedebuggers
-	info.debugMarkersSupported = false;
+	// check for validation layers and frame debuggers
+	info.usingDebugMarkerTool = false;
+	info.usingTracingTool = false;
 	if (info.deviceExtensions.tooling_info && vkGetPhysicalDeviceToolPropertiesEXT)
 	{
 		uint32_t toolCount = 0;
@@ -1288,8 +1293,10 @@ bool VulkanRenderer::CheckDeviceExtensionSupport(const VkPhysicalDevice device, 
 			{
 				for (auto& itr : toolProperties)
 				{
-					if ((itr.purposes & VK_TOOL_PURPOSE_DEBUG_MARKERS_BIT_EXT) != 0)
-						info.debugMarkersSupported = true;
+					if ((itr.purposes & VK_TOOL_PURPOSE_DEBUG_MARKERS_BIT_EXT) != 0 && info.instanceExtensions.debug_utils && vkSetDebugUtilsObjectNameEXT)
+						info.usingDebugMarkerTool = true;
+					if ((itr.purposes & VK_TOOL_PURPOSE_TRACING_BIT) != 0)
+						info.usingTracingTool = true;
 				}
 			}
 		}
@@ -1327,18 +1334,16 @@ std::vector<const char*> VulkanRenderer::CheckInstanceExtensionSupport(FeatureCo
 	requiredInstanceExtensions.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
 	#if BOOST_OS_WINDOWS
 	requiredInstanceExtensions.emplace_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-    #elif BOOST_OS_LINUX
-    #if __ANDROID__
+	#elif BOOST_PLAT_ANDROID
 	requiredInstanceExtensions.emplace_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
-    #else
-	auto backend = GuiSystem::getWindowInfo().window_main.backend;
-	if(backend == GuiSystem::WindowHandleInfo::Backend::X11)
+	#elif BOOST_OS_LINUX || BOOST_OS_BSD
+	auto backend = WindowSystem::GetWindowInfo().window_main.backend;
+	if(backend == WindowSystem::WindowHandleInfo::Backend::X11)
 		requiredInstanceExtensions.emplace_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
 	#if HAS_WAYLAND
-	else if (backend == GuiSystem::WindowHandleInfo::Backend::Wayland)
+	else if (backend == WindowSystem::WindowHandleInfo::Backend::Wayland)
 		requiredInstanceExtensions.emplace_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
     #endif // HAS_WAYLAND
-    #endif // __ANDROID__
 	#elif BOOST_OS_MACOS
 	requiredInstanceExtensions.emplace_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
 	#endif
@@ -1418,8 +1423,7 @@ VkSurfaceKHR VulkanRenderer::CreateWinSurface(VkInstance instance, HWND hwindow)
 }
 #endif
 
-#if BOOST_OS_LINUX
-#if __ANDROID__
+#if BOOST_PLAT_ANDROID
 VkSurfaceKHR VulkanRenderer::CreateAndroidSurface(VkInstance instance, ANativeWindow* window)
 {
     VkAndroidSurfaceCreateInfoKHR sci{};
@@ -1437,7 +1441,7 @@ VkSurfaceKHR VulkanRenderer::CreateAndroidSurface(VkInstance instance, ANativeWi
 
     return result;
 }
-#else
+#elif BOOST_OS_LINUX || BOOST_OS_BSD
 VkSurfaceKHR VulkanRenderer::CreateXlibSurface(VkInstance instance, Display* dpy, Window window)
 {
     VkXlibSurfaceCreateInfoKHR sci{};
@@ -1494,30 +1498,40 @@ VkSurfaceKHR VulkanRenderer::CreateWaylandSurface(VkInstance instance, wl_displa
 
     return result;
 }
-#endif // HAS_WAYLAND
-#endif // __ANDROID__
-#endif // BOOST_OS_LINUX
+#endif
+#endif
 
-VkSurfaceKHR VulkanRenderer::CreateFramebufferSurface(VkInstance instance, struct GuiSystem::WindowHandleInfo& windowInfo)
+#if BOOST_PLAT_ANDROID
+VkSurfaceKHR VulkanRenderer::CreateFramebufferSurface(VkInstance instance, struct WindowSystem::WindowHandleInfo& windowInfo, ANativeWindow** nativeWindow)
+{
+	auto window = static_cast<ANativeWindow*>(windowInfo.surface.load());
+	VkSurfaceKHR surface = CreateAndroidSurface(instance, window);
+
+	if (nativeWindow != nullptr)
+	{
+		*nativeWindow = window;
+	}
+
+	return surface;
+}
+#else
+VkSurfaceKHR VulkanRenderer::CreateFramebufferSurface(VkInstance instance, WindowSystem::WindowHandleInfo& windowInfo)
 {
 #if BOOST_OS_WINDOWS
-	return CreateWinSurface(instance, reinterpret_cast<HWND>(windowInfo.hwnd));
-#elif BOOST_OS_LINUX
-#if __ANDROID__
-	return CreateAndroidSurface(instance, static_cast<ANativeWindow*>(windowInfo.surface));
-#else
-	if(windowInfo.backend == GuiSystem::WindowHandleInfo::Backend::X11)
-		return CreateXlibSurface(instance, static_cast<Display*>(windowInfo.display), reinterpret_cast<Window>(windowInfo.surface));
-	#ifdef HAS_WAYLAND
-	if(windowInfo.backend == GuiSystem::WindowHandleInfo::Backend::Wayland)
-		return CreateWaylandSurface(instance, static_cast<wl_display*>(windowInfo.display), static_cast<wl_surface*>(windowInfo.surface));
-	#endif
+	return CreateWinSurface(instance, static_cast<HWND>(windowInfo.surface.load()));
+#elif BOOST_OS_LINUX || BOOST_OS_BSD
+	if (windowInfo.backend == WindowSystem::WindowHandleInfo::Backend::X11)
+		return CreateXlibSurface(instance, static_cast<Display*>(windowInfo.display.load()), reinterpret_cast<Window>(windowInfo.surface.load()));
+#ifdef HAS_WAYLAND
+	if (windowInfo.backend == WindowSystem::WindowHandleInfo::Backend::Wayland)
+		return CreateWaylandSurface(instance, static_cast<wl_display*>(windowInfo.display.load()), static_cast<wl_surface*>(windowInfo.surface.load()));
+#endif
 	return {};
-#endif // __ANDROID__
 #elif BOOST_OS_MACOS
-	return CreateCocoaSurface(instance, windowInfo.surface);
+	return CreateCocoaSurface(instance, windowInfo.surface.load());
 #endif
 }
+#endif
 
 void VulkanRenderer::CreateCommandPool()
 {
@@ -2456,7 +2470,7 @@ void VulkanRenderer::GetTextureFormatInfoVK(Latte::E_GX2SURFFMT format, bool isD
 				}
 				else {
 					formatInfoOut->vkImageFormat = VK_FORMAT_R4G4B4A4_UNORM_PACK16;
-					formatInfoOut->decoder = TextureDecoder_R4_G4_UNORM_To_RGBA4_vk::getInstance();
+					formatInfoOut->decoder = TextureDecoder_R4_G4_UNORM_To_ABGR4::getInstance();
 				}
 			}
 			else
@@ -2728,7 +2742,6 @@ VkPipeline VulkanRenderer::backbufferBlit_createGraphicsPipeline(VkDescriptorSet
 	uint64 hash = 0;
 	hash += (uint64)vertexRendererShader;
 	hash += (uint64)fragmentRendererShader;
-	hash += (uint64)(chainInfo.m_usesSRGB);
 	hash += ((uint64)padView) << 1;
 
 	const auto it = m_backbufferBlitPipelineCache.find(hash);
@@ -2798,6 +2811,8 @@ VkPipeline VulkanRenderer::backbufferBlit_createGraphicsPipeline(VkDescriptorSet
 		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 		.offset = 0,
 		.size = 3 * sizeof(float) * 2 // 3 vec2's
+				+ 4 // + 1 VkBool32
+				+ 4 * 2 // + 2 float
 	};
 
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -2880,11 +2895,11 @@ void VulkanRenderer::RecreateSwapchain(bool mainWindow, bool skipCreate)
 	if (mainWindow)
 	{
 		ImGui_ImplVulkan_Shutdown();
-		GuiSystem::getWindowPhysSize(size.x, size.y);
+		WindowSystem::GetWindowPhysSize(size.x, size.y);
 	}
 	else
 	{
-		GuiSystem::getPadWindowPhysSize(size.x, size.y);
+		WindowSystem::GetPadWindowPhysSize(size.x, size.y);
 	}
 
 	chainInfo.swapchainImageIndex = -1;
@@ -2908,18 +2923,19 @@ bool VulkanRenderer::UpdateSwapchainProperties(bool mainWindow)
 	if(chainInfo.m_vsyncState != configValue)
 		stateChanged = true;
 
-	const bool latteBufferUsesSRGB = mainWindow ? LatteGPUState.tvBufferUsesSRGB : LatteGPUState.drcBufferUsesSRGB;
-	if (chainInfo.m_usesSRGB != latteBufferUsesSRGB)
-		stateChanged = true;
-
 	int width, height;
 	if (mainWindow)
-		GuiSystem::getWindowPhysSize(width, height);
+		WindowSystem::GetWindowPhysSize(width, height);
 	else
-		GuiSystem::getPadWindowPhysSize(width, height);
+		WindowSystem::GetPadWindowPhysSize(width, height);
 	auto extent = chainInfo.getExtent();
 	if (width != extent.width || height != extent.height)
 		stateChanged = true;
+
+#if BOOST_PLAT_ANDROID
+	if (chainInfo.surfaceWasLost)
+		stateChanged = true;
+#endif
 
 	if(stateChanged)
 	{
@@ -2936,7 +2952,6 @@ bool VulkanRenderer::UpdateSwapchainProperties(bool mainWindow)
 
 	chainInfo.m_shouldRecreate = false;
 	chainInfo.m_vsyncState = configValue;
-	chainInfo.m_usesSRGB = latteBufferUsesSRGB;
 	return true;
 }
 
@@ -2997,21 +3012,31 @@ void VulkanRenderer::SwapBuffer(bool mainWindow)
 	}
 
 	VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
-	if (result < 0 && result != VK_ERROR_OUT_OF_DATE_KHR)
+	if (result < 0 && result != VK_ERROR_OUT_OF_DATE_KHR
+#if BOOST_PLAT_ANDROID
+		&& result != VK_ERROR_SURFACE_LOST_KHR
+#endif
+	)
 	{
 		throw std::runtime_error(fmt::format("Failed to present image: {}", result));
 	}
+
 	if(result == VK_ERROR_OUT_OF_DATE_KHR)
 		chainInfo.m_shouldRecreate = true;
 
-	if(result >= 0)
+	if (result >= 0)
 	{
 		chainInfo.m_queueDepth++;
 		chainInfo.m_presentId++;
 	}
 
-#if !__ANDROID__
-	if(result == VK_SUBOPTIMAL_KHR)
+#if BOOST_PLAT_ANDROID
+	if (result == VK_ERROR_SURFACE_LOST_KHR)
+		chainInfo.surfaceWasLost = true;
+#endif
+
+#if !BOOST_PLAT_ANDROID
+	if (result == VK_SUBOPTIMAL_KHR)
 		chainInfo.m_shouldRecreate = true;
 #endif
 
@@ -3188,24 +3213,35 @@ void VulkanRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutpu
 
 	vkCmdBindDescriptorSets(m_state.currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &descriptSet, 0, nullptr);
 
+
 	// update push constants
-	Vector2f pushData[3];
+	struct
+	{
+		Vector2f vecs[3];
+		VkBool32 applySRGBEncoding;
+		float targetGamma;
+		float displayGamma;
+	} pushData;
 
 	// textureSrcResolution
 	sint32 effectiveWidth, effectiveHeight;
 	texView->baseTexture->GetEffectiveSize(effectiveWidth, effectiveHeight, 0);
-	pushData[0] = {(float)effectiveWidth, (float)effectiveHeight};
+	pushData.vecs[0] = {(float)effectiveWidth, (float)effectiveHeight};
 
 	// nativeResolution
-	pushData[1] = {
+	pushData.vecs[1] = {
 		(float)texViewVk->baseTexture->width,
 		(float)texViewVk->baseTexture->height,
 	};
 
 	// outputResolution
-	pushData[2] = {(float)imageWidth,(float)imageHeight};
+	pushData.vecs[2] = {(float)imageWidth,(float)imageHeight};
 
-	vkCmdPushConstants(m_state.currentCommandBuffer, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(float) * 2 * 3, &pushData);
+	pushData.applySRGBEncoding = padView ? LatteGPUState.drcBufferUsesSRGB : LatteGPUState.tvBufferUsesSRGB;
+	pushData.targetGamma = padView ? ActiveSettings::GetDRCGamma() : ActiveSettings::GetTVGamma();
+	pushData.displayGamma = GetConfig().userDisplayGamma;
+
+	vkCmdPushConstants(m_state.currentCommandBuffer, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pushData), &pushData);
 
 	vkCmdDraw(m_state.currentCommandBuffer, 6, 1, 0, 0);
 

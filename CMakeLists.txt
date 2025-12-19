@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21.1)
+cmake_minimum_required(VERSION 3.25)
 
 option(ENABLE_VCPKG "Enable the vcpkg package manager" ON)
 option(MACOS_BUNDLE "The executable when built on macOS will be created as an application bundle" OFF)
@@ -25,7 +25,7 @@ if (ENABLE_VCPKG)
 	OUTPUT_VARIABLE is_vcpkg_shallow
 	OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-	
+
 	if(is_vcpkg_shallow STREQUAL "true")
 		message(STATUS "vcpkg is shallow. Unshallowing it now...")
 		execute_process(
@@ -38,11 +38,11 @@ if (ENABLE_VCPKG)
 
 
 	if(UNIX AND NOT APPLE AND NOT VCPKG_TARGET_ANDROID)
-		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports_linux")
+		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports_linux;${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports")
 	elseif(APPLE)
-		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports_mac")
+		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports_mac;${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports")
 	else()
-		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports")
+		set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports_win;${CMAKE_CURRENT_LIST_DIR}/dependencies/vcpkg_overlay_ports")
 	endif()
 	if(VCPKG_TARGET_ANDROID)
 		set(ENV{ANDROID_NDK_HOME} ${ANDROID_NDK})
@@ -78,10 +78,8 @@ add_definitions(-DEMULATOR_VERSION_PATCH=${EMULATOR_VERSION_PATCH})
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 # enable link time optimization for release builds
-if(NOT ANDROID)
-	set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-	set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
-endif()
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
 
 if (MSVC)
 	set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT CemuBin)
@@ -102,7 +100,7 @@ endif()
 
 if (APPLE)
     enable_language(OBJC OBJCXX)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.4")
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -111,10 +109,20 @@ if (UNIX AND NOT APPLE)
 	option(ENABLE_BLUEZ "Build with Bluez support" ON)
 endif()
 
+if (APPLE)
+    set(ENABLE_METAL_DEFAULT ON)
+else()
+    set(ENABLE_METAL_DEFAULT OFF)
+endif()
+
 option(ENABLE_OPENGL "Enables the OpenGL backend" ON)
 option(ENABLE_VULKAN "Enables the Vulkan backend" ON)
+option(ENABLE_METAL "Enables the Metal backend" ${ENABLE_METAL_DEFAULT})
 option(ENABLE_DISCORD_RPC "Enables the Discord Rich Presence feature" ON)
 
+if (ENABLE_METAL AND NOT APPLE)
+    message(FATAL_ERROR "Metal backend is only supported on Apple platforms")
+endif()
 
 # input backends
 if (WIN32)
@@ -174,14 +182,14 @@ if (UNIX AND NOT APPLE AND NOT ANDROID)
 			BASENAME viewporter)
 		add_library(CemuWaylandProtocols STATIC ${WAYLAND_PROTOCOL_SRCS})
 		target_include_directories(CemuWaylandProtocols PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
-
+		target_include_directories(CemuWaylandProtocols PRIVATE ${Wayland_INCLUDE_DIRS})
 		add_compile_definitions(HAS_WAYLAND)
 	endif()
 	find_package(GTK3 REQUIRED)
 
 	if(ENABLE_BLUEZ)
 		find_package(bluez REQUIRED)
-		set(ENABLE_WIIMOTE ON)
+		set(SUPPORTS_WIIMOTE ON)
 		add_compile_definitions(HAS_BLUEZ)
 	endif()
 
@@ -195,15 +203,19 @@ if (ENABLE_OPENGL)
 	find_package(OpenGL REQUIRED)
 endif()
 
+if (ENABLE_METAL)
+    include_directories(${CMAKE_SOURCE_DIR}/dependencies/metal-cpp)
+
+    add_definitions(-DENABLE_METAL=1)
+endif()
+
 if (ENABLE_DISCORD_RPC)
 	add_compile_definitions(ENABLE_DISCORD_RPC)
-	add_subdirectory(dependencies/discord-rpc EXCLUDE_FROM_ALL)
-	target_include_directories(discord-rpc INTERFACE ./dependencies/discord-rpc/include)
 endif()
 
 if (ENABLE_HIDAPI)
 	find_package(hidapi REQUIRED)
-	set(ENABLE_WIIMOTE ON)
+	set(SUPPORTS_WIIMOTE ON)
 	add_compile_definitions(HAS_HIDAPI)
 endif ()
 
@@ -216,12 +228,12 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
 endif()
 
 if (ENABLE_WXWIDGETS)
-	find_package(wxWidgets 3.2 REQUIRED COMPONENTS base core gl propgrid xrc)
+	find_package(wxWidgets 3.3 REQUIRED COMPONENTS base core gl propgrid xrc)
 endif()
 
 if (ENABLE_CUBEB)
 	if (NOT ENABLE_VCPKG)
-	find_package(cubeb)
+	    find_package(cubeb)
 	endif()
 	if (NOT cubeb_FOUND)
 		option(BUILD_TESTS "" OFF)
@@ -237,7 +249,12 @@ endif()
 
 add_subdirectory("dependencies/ih264d" EXCLUDE_FROM_ALL)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64)|(AARCH64)")
+if (CMAKE_OSX_ARCHITECTURES)
+	set(CEMU_ARCHITECTURE ${CMAKE_OSX_ARCHITECTURES})
+else()
+	set(CEMU_ARCHITECTURE ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+if(CEMU_ARCHITECTURE MATCHES "(aarch64)|(AARCH64)|(arm64)|(ARM64)")
 	add_subdirectory("dependencies/xbyak_aarch64" EXCLUDE_FROM_ALL)
 endif()
 
@@ -251,6 +268,7 @@ if(ANDROID)
 		add_subdirectory("dependencies/libadrenotools" EXCLUDE_FROM_ALL)
 	endif()
 	add_subdirectory("dependencies/libucontext" EXCLUDE_FROM_ALL)
+	add_subdirectory("dependencies/stb" EXCLUDE_FROM_ALL)
 endif()
 
 add_subdirectory(src)
