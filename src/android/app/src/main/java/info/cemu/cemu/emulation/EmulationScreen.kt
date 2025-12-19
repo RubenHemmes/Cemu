@@ -261,6 +261,24 @@ private fun EmulationSideMenuContent(
     )
 
     CheckboxItem(
+        label = tr("External PAD screen"),
+        checked = sideMenuState.isPadOnExternalDisplay,
+        onCheckedChange = { updateState(sideMenuState.copy(isPadOnExternalDisplay = it)) },
+    )
+
+    CheckboxItem(
+        label = tr("Swap screens"),
+        checked = sideMenuState.areScreensSwapped,
+        onCheckedChange = { updateState(sideMenuState.copy(areScreensSwapped = it)) },
+    )
+
+    CheckboxItem(
+        label = tr("Rotate external screen left"),
+        checked = sideMenuState.isExternalScreenRotatedLeft,
+        onCheckedChange = { updateState(sideMenuState.copy(isExternalScreenRotatedLeft = it)) },
+    )
+
+    CheckboxItem(
         label = tr("Show input overlay"),
         checked = sideMenuState.isInputOverlayVisible,
         onCheckedChange = { updateState(sideMenuState.copy(isInputOverlayVisible = it)) },
