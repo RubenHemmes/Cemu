@@ -387,8 +387,9 @@ private fun EmulationSurface(
         modifier = modifier, factory = { context ->
             SurfaceView(context).apply {
                 var firstChange = true
+                val touchListener = CanvasOnTouchListener()
 
-                setOnTouchListener(CanvasOnTouchListener(isTV))
+                setOnTouchListener(touchListener)
 
                 holder.addCallback(holderCallback)
 
@@ -396,6 +397,7 @@ private fun EmulationSurface(
                     override fun surfaceChanged(
                         holder: SurfaceHolder, format: Int, width: Int, height: Int
                     ) {
+                        touchListener.updateConfiguration(isTV, width, height, false)
                         if (firstChange) {
                             afterInit()
                             firstChange = false
