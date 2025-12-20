@@ -100,7 +100,10 @@ class EmulationActivity : AppCompatActivity() {
 
         val externalDisplay = DisplayUtils.getExternalDisplay(this)
 
-        if (externalDisplay != null) {
+        val launchedFromExternal = externalDisplay != null &&
+            display?.displayId == externalDisplay.displayId
+
+        if (externalDisplay != null && !launchedFromExternal) {
             padPresentation = PadPresentation(this, externalDisplay)
             padPresentation?.show()
         }

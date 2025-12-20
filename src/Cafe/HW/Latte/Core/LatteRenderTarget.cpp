@@ -1010,12 +1010,12 @@ void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uin
 
 	bool showDRC = swkbd::hasKeyboardInputHook() == false && (isDRCPrimary ^ altScreenRequested);
 
-        const bool swapScreens = WindowSystem::GetWindowInfo().swap_screens;
+	const bool swapScreens = WindowSystem::GetWindowInfo().swap_screens;
 
-        if ((renderTarget & (swapScreens ? RENDER_TARGET_TV : RENDER_TARGET_DRC)) && g_renderer->IsPadWindowActive())
-                LatteRenderTarget_copyToBackbuffer(texView, true);
-        if (((renderTarget & RENDER_TARGET_TV) && !showDRC) || ((renderTarget & RENDER_TARGET_DRC) && showDRC))
-                LatteRenderTarget_copyToBackbuffer(texView, false);
+	if ((renderTarget & (swapScreens ? RENDER_TARGET_TV : RENDER_TARGET_DRC)) && g_renderer->IsPadWindowActive())
+		LatteRenderTarget_copyToBackbuffer(texView, true);
+	if (((renderTarget & RENDER_TARGET_TV) && !showDRC) || ((renderTarget & RENDER_TARGET_DRC) && showDRC))
+		LatteRenderTarget_copyToBackbuffer(texView, false);
 }
 
 

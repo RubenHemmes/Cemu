@@ -230,19 +230,8 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setDPI([[maybe_unused]] JNIE
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_clearPadSurface([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-	auto& windowInfo = WindowSystem::GetWindowInfo();
-	windowInfo.pad_open = false;
-
-	auto renderer = VulkanRenderer::GetInstance();
-	if (renderer)
-		renderer->StopUsingPadAndWait();
-
-	auto padCanvas = windowInfo.canvas_pad.surface.load();
-	if (padCanvas != nullptr)
-	{
-		ANativeWindow_release(static_cast<ANativeWindow*>(padCanvas));
-		windowInfo.canvas_pad.surface = nullptr;
-	}
+	VulkanRenderer::GetInstance()->StopUsingPadAndWait();
+	WindowSystem::GetWindowInfo().pad_open = false;
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT jboolean JNICALL
