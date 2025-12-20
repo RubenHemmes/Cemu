@@ -175,8 +175,8 @@ namespace NativeEmulation
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_setReplaceTVWithPadView([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean swapped)
 {
-        // Emulate pressing the TAB key for showing DRC instead of TV
-        WindowSystem::GetWindowInfo().set_keystate(static_cast<uint32>(WindowSystem::PlatformKeyCodes::TAB), swapped);
+	// Emulate pressing the TAB key for showing DRC instead of TV
+	WindowSystem::GetWindowInfo().set_keystate(static_cast<uint32>(WindowSystem::PlatformKeyCodes::TAB), swapped);
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
@@ -184,18 +184,15 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSwapScreens([[maybe_unuse
                                                                    [[maybe_unused]] jclass clazz,
                                                                    jboolean swapped)
 {
-        auto& windowInfo = WindowSystem::GetWindowInfo();
-        windowInfo.swap_screens = swapped;
-        LatteGPUState.isDRCPrimary = swapped;
+	auto& windowInfo = WindowSystem::GetWindowInfo();
+	windowInfo.swap_screens = swapped;
+	LatteGPUState.isDRCPrimary = swapped;
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
-Java_info_cemu_cemu_nativeinterface_NativeEmulation_setExternalScreenRotatedLeft(
-    [[maybe_unused]] JNIEnv* env,
-    [[maybe_unused]] jclass clazz,
-    jboolean rotated)
+Java_info_cemu_cemu_nativeinterface_NativeEmulation_setExternalScreenRotatedLeft([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jboolean rotated)
 {
-        WindowSystem::GetWindowInfo().external_screen_rotated_left = rotated;
+	WindowSystem::GetWindowInfo().external_screen_rotated_left = rotated;
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
@@ -233,22 +230,19 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setDPI([[maybe_unused]] JNIE
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeEmulation_clearPadSurface([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-        auto& windowInfo = WindowSystem::GetWindowInfo();
-        if (is_main_canvas)
-                return;
+	auto& windowInfo = WindowSystem::GetWindowInfo();
+	windowInfo.pad_open = false;
 
-        windowInfo.pad_open = false;
+	auto renderer = VulkanRenderer::GetInstance();
+	if (renderer)
+		renderer->StopUsingPadAndWait();
 
-        auto renderer = VulkanRenderer::GetInstance();
-        if (renderer)
-                renderer->StopUsingPadAndWait();
-
-        auto& padHandle = windowInfo.canvas_pad;
-        if (padHandle.surface)
-        {
-                ANativeWindow_release(static_cast<ANativeWindow*>(padHandle.surface));
-                padHandle.surface = nullptr;
-        }
+	auto padCanvas = windowInfo.canvas_pad.surface.load();
+	if (padCanvas != nullptr)
+	{
+		ANativeWindow_release(static_cast<ANativeWindow*>(padCanvas));
+		windowInfo.canvas_pad.surface = nullptr;
+	}
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT jboolean JNICALL

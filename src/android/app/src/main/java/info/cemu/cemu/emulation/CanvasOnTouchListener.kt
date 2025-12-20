@@ -58,8 +58,8 @@ class CanvasOnTouchListener : View.OnTouchListener {
         var targetX = normalizedX * surfaceWidth
         var targetY = normalizedY * surfaceHeight
         if (rotateLeft) {
-            val rotatedX = normalizedY * surfaceWidth
-            val rotatedY = (1f - normalizedX) * surfaceHeight
+            val rotatedX = (1f - normalizedY) * surfaceWidth
+            val rotatedY = normalizedX * surfaceHeight
             targetX = rotatedX
             targetY = rotatedY
         }
@@ -77,11 +77,6 @@ class CanvasOnTouchListener : View.OnTouchListener {
                 return true
             }
 
-            MotionEvent.ACTION_MOVE -> {
-                NativeInput.onTouchMove(xi, yi, isTV)
-                return true
-            }
-
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (pointerId != currentPointerId && currentPointerId != -1) {
                     if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
@@ -90,6 +85,11 @@ class CanvasOnTouchListener : View.OnTouchListener {
                 }
                 currentPointerId = -1
                 NativeInput.onTouchUp(xi, yi, isTV)
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                NativeInput.onTouchMove(xi, yi, isTV)
                 return true
             }
         }

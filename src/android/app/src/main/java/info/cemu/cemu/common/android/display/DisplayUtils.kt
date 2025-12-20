@@ -13,8 +13,7 @@ object DisplayUtils {
         if (launchDisplayId != null) {
             return
         }
-        val displayId = activity.display?.displayId
-            ?: activity.windowManager.defaultDisplay.displayId
+        val displayId = activity.display?.displayId ?: Display.DEFAULT_DISPLAY
         launchDisplayId = displayId
     }
 

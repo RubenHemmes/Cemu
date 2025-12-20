@@ -81,7 +81,19 @@ class EmulationViewModel(
     init {
         viewModelScope.launch {
             val settings = dataStore.data.first()
-            _sideMenuState.update { it.copy(isInputOverlayVisible = settings.inputOverlaySettings.isOverlayEnabled) }
+            _sideMenuState.update {
+                it.copy(
+                    isInputOverlayVisible = settings.inputOverlaySettings.isOverlayEnabled,
+                    isPadVisible = settings.emulationSettings.isPadVisible,
+                    isPadOnExternalDisplay = settings.emulationSettings.isPadOnExternalDisplay,
+                    areScreensSwapped = settings.emulationSettings.areScreensSwapped,
+                    isExternalScreenRotatedLeft = settings.emulationSettings.isExternalScreenRotatedLeft,
+                )
+            }
+            NativeEmulation.setSwapScreens(_sideMenuState.value.isPadVisible && settings.emulationSettings.areScreensSwapped)
+            NativeEmulation.setExternalScreenRotatedLeft(settings.emulationSettings.isExternalScreenRotatedLeft)
+
+            updateTouchListenerConfigurations()
         }
     }
 
@@ -114,7 +126,42 @@ class EmulationViewModel(
     }
 
     fun updateSideMenuState(sideMenuState: SideMenuState) {
-        _sideMenuState.value = sideMenuState
+        val oldState = _sideMenuState.value
+        _sideMenuState.update { sideMenuState }
+
+        var needsTouchListenerUpdate = false
+
+        if (oldState.areScreensSwapped != sideMenuState.areScreensSwapped ||
+            oldState.isPadVisible != sideMenuState.isPadVisible) {
+            NativeEmulation.setSwapScreens(sideMenuState.areScreensSwapped && sideMenuState.isPadVisible)
+            needsTouchListenerUpdate = true
+        }
+
+        if (oldState.isExternalScreenRotatedLeft != sideMenuState.isExternalScreenRotatedLeft) {
+            NativeEmulation.setExternalScreenRotatedLeft(sideMenuState.isExternalScreenRotatedLeft)
+            needsTouchListenerUpdate = true
+        }
+
+        if (oldState.isPadOnExternalDisplay != sideMenuState.isPadOnExternalDisplay) {
+            needsTouchListenerUpdate = true
+        }
+
+        if (needsTouchListenerUpdate) {
+            updateTouchListenerConfigurations()
+        }
+
+        viewModelScope.launch {
+            dataStore.updateData { settings ->
+                settings.copy(
+                    emulationSettings = settings.emulationSettings.copy(
+                        isPadVisible = sideMenuState.isPadVisible,
+                        areScreensSwapped = sideMenuState.areScreensSwapped,
+                        isExternalScreenRotatedLeft = sideMenuState.isExternalScreenRotatedLeft,
+                        isPadOnExternalDisplay = sideMenuState.isPadOnExternalDisplay,
+                    )
+                )
+            }
+        }
     }
 
     val gamePadPosition = dataStore.data.map { it.emulationSettings.gamePadPosition }
@@ -126,6 +173,70 @@ class EmulationViewModel(
 
     val destroyedSurfaces = ConditionFlags()
     var setSurfaces = ConditionFlags()
+
+    private val mainSurfaceDimensions = SurfaceDimensions()
+    private val padSurfaceDimensions = SurfaceDimensions()
+
+    lateinit var mainCanvasTouchListener: CanvasOnTouchListener
+    var padCanvasTouchListener: CanvasOnTouchListener? = null
+    var padPresentationTouchListener: CanvasOnTouchListener? = null
+
+    fun updateSurfaceDimensions(isMainCanvas: Boolean, width: Int, height: Int) {
+        val dimensions = if (isMainCanvas) mainSurfaceDimensions else padSurfaceDimensions
+        dimensions.width = width.coerceAtLeast(1)
+        dimensions.height = height.coerceAtLeast(1)
+
+        val isMainTargetingTv = !_sideMenuState.value.areScreensSwapped
+
+        if (isMainCanvas || !isMainTargetingTv) {
+            updateMainTouchListener()
+        }
+
+        if (!isMainCanvas || !isMainTargetingTv) {
+            updatePadTouchListeners()
+        }
+    }
+
+    fun updateTouchListenerConfigurations() {
+        updateMainTouchListener();
+        updatePadTouchListeners()
+    }
+
+    fun updateMainTouchListener() {
+        if (!::mainCanvasTouchListener.isInitialized) {
+            return
+        }
+        val isTvTarget = !_sideMenuState.value.areScreensSwapped
+        val targetDimensions = if (isTvTarget) mainSurfaceDimensions else padSurfaceDimensions
+
+        mainCanvasTouchListener.updateConfiguration(
+            isTv = isTvTarget,
+            surfaceWidth = targetDimensions.width,
+            surfaceHeight = targetDimensions.height,
+            rotateLeft = false
+        )
+    }
+
+    fun updatePadTouchListeners() {
+        val isTvTarget = _sideMenuState.value.areScreensSwapped
+        val targetDimensions = if (isTvTarget) mainSurfaceDimensions else padSurfaceDimensions
+
+        padCanvasTouchListener?.updateConfiguration(
+            isTvTarget,
+            targetDimensions.width,
+            targetDimensions.height,
+            false
+        )
+
+        val rotateLeft = _sideMenuState.value.isPadOnExternalDisplay
+            && _sideMenuState.value.isExternalScreenRotatedLeft
+        padPresentationTouchListener?.updateConfiguration(
+            isTvTarget,
+            targetDimensions.width,
+            targetDimensions.height,
+            rotateLeft
+        )
+    }
 
     private inner class CanvasSurfaceHolderCallback(val isMainCanvas: Boolean) :
         SurfaceHolder.Callback {

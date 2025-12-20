@@ -36,6 +36,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +73,9 @@ fun EmulationScreen(
         factory = EmulationViewModel.Factory, extras = MutableCreationExtras().apply {
             set(EmulationViewModel.LAUNCH_PATH_KEY, gamePath)
         }),
+    onViewModelReady: ((EmulationViewModel) -> Unit)? = null,
+    onPadOnExternalDisplayChange: ((Boolean) -> Unit)? = null,
+    onExternalScreenRotationChange: (() -> Unit)? = null,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -83,6 +87,24 @@ fun EmulationScreen(
     val isInputOverlayVisible by viewModel.isInputOverlayVisible.collectAsState()
     val inputOverlaySettings by viewModel.inputOverlaySettings.collectAsState()
     var inputOverlayInputMode by rememberSaveable { mutableStateOf(DEFAULT) }
+
+    LaunchedEffect(viewModel) {
+        onViewModelReady?.invoke(viewModel)
+    }
+
+    val isPadOnExternal = sideMenuState.isPadVisible && sideMenuState.isPadOnExternalDisplay
+
+    LaunchedEffect(isPadOnExternal, isEmulationInitialized) {
+        if (isEmulationInitialized) {
+            onPadOnExternalDisplayChange?.invoke(isPadOnExternal)
+        }
+    }
+
+    LaunchedEffect(sideMenuState.isExternalScreenRotatedLeft, isPadOnExternal, isEmulationInitialized) {
+        if (isEmulationInitialized && isPadOnExternal) {
+            onExternalScreenRotationChange?.invoke()
+        }
+    }
 
     fun snackbarMessage(message: String) {
         scope.launch {
@@ -262,18 +284,21 @@ private fun EmulationSideMenuContent(
 
     CheckboxItem(
         label = tr("External PAD screen"),
+        enabled = sideMenuState.isPadVisible,
         checked = sideMenuState.isPadOnExternalDisplay,
         onCheckedChange = { updateState(sideMenuState.copy(isPadOnExternalDisplay = it)) },
     )
 
     CheckboxItem(
         label = tr("Swap screens"),
+        enabled = sideMenuState.isPadVisible,
         checked = sideMenuState.areScreensSwapped,
         onCheckedChange = { updateState(sideMenuState.copy(areScreensSwapped = it)) },
     )
 
     CheckboxItem(
         label = tr("Rotate external screen left"),
+        enabled = sideMenuState.isPadVisible,
         checked = sideMenuState.isExternalScreenRotatedLeft,
         onCheckedChange = { updateState(sideMenuState.copy(isExternalScreenRotatedLeft = it)) },
     )
@@ -356,19 +381,22 @@ private fun TextButtonItem(
 private fun EmulationSurfaces(viewModel: EmulationViewModel) {
     val sideMenuState by viewModel.sideMenuState.collectAsState()
     val gamePadPosition by viewModel.gamePadPosition.collectAsState()
+    val isEmulationInitialized by viewModel.isEmulationInitialized.collectAsState()
 
     LinearLayout(gamePadPosition) { itemModifier ->
         EmulationSurface(
             modifier = itemModifier,
             isTV = true,
+            viewModel = viewModel,
             holderCallback = viewModel.mainHolderCallback,
             afterInit = { viewModel.initializeEmulation() },
         )
 
-        if (sideMenuState.isPadVisible) {
+        if (isEmulationInitialized && sideMenuState.isPadVisible && !sideMenuState.isPadOnExternalDisplay) {
             EmulationSurface(
                 modifier = itemModifier,
                 isTV = false,
+                viewModel = viewModel,
                 holderCallback = viewModel.padHolderCallback,
             )
         }
@@ -380,6 +408,7 @@ private fun EmulationSurfaces(viewModel: EmulationViewModel) {
 private fun EmulationSurface(
     modifier: Modifier,
     isTV: Boolean,
+    viewModel: EmulationViewModel,
     holderCallback: SurfaceHolder.Callback,
     afterInit: () -> Unit = {}
 ) {
@@ -391,13 +420,21 @@ private fun EmulationSurface(
 
                 setOnTouchListener(touchListener)
 
+                if(isTV) {
+                    viewModel.mainCanvasTouchListener = touchListener;
+                    viewModel.updateMainTouchListener();
+                } else {
+                    viewModel.padCanvasTouchListener = touchListener;
+                    viewModel.updatePadTouchListeners();
+                }
+
                 holder.addCallback(holderCallback)
 
                 holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceChanged(
                         holder: SurfaceHolder, format: Int, width: Int, height: Int
                     ) {
-                        touchListener.updateConfiguration(isTV, width, height, false)
+                        viewModel.updateSurfaceDimensions(isTV, width, height)
                         if (firstChange) {
                             afterInit()
                             firstChange = false
